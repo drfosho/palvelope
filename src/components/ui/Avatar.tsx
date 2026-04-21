@@ -2,15 +2,16 @@ import React from "react";
 import { View, Text, StyleSheet } from "react-native";
 import { typography } from "@/theme/tokens";
 
-type AvatarSize = "sm" | "md" | "lg";
+type AvatarSize = "sm" | "md" | "lg" | "xl";
 
 interface AvatarProps {
   name: string;
   size?: AvatarSize;
+  hue?: number;
 }
 
-const dimensions: Record<AvatarSize, number> = { sm: 28, md: 36, lg: 48 };
-const fontSizes: Record<AvatarSize, number> = { sm: 12, md: 14, lg: 19 };
+const dimensions: Record<AvatarSize, number> = { sm: 28, md: 36, lg: 48, xl: 64 };
+const fontSizes: Record<AvatarSize, number> = { sm: 12, md: 14, lg: 19, xl: 26 };
 
 function deterministicHue(name: string): number {
   let hash = 0;
@@ -20,9 +21,9 @@ function deterministicHue(name: string): number {
   return Math.abs(hash) % 360;
 }
 
-export default function Avatar({ name, size = "md" }: AvatarProps) {
+export default function Avatar({ name, size = "md", hue: hueOverride }: AvatarProps) {
   const dim = dimensions[size];
-  const hue = deterministicHue(name);
+  const hue = hueOverride ?? deterministicHue(name);
   const initial = name.trim().charAt(0).toUpperCase();
 
   return (

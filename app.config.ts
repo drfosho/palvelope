@@ -9,6 +9,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   orientation: "portrait",
   icon: "./assets/icon.png",
   userInterfaceStyle: "light",
+  platforms: ["ios", "android"],
   newArchEnabled: true,
   splash: {
     image: "./assets/splash-icon.png",
@@ -16,16 +17,15 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     backgroundColor: "#FBFAF6",
   },
   ios: {
+    bundleIdentifier: "com.palvelope.app",
     supportsTablet: true,
   },
   android: {
+    package: "com.palvelope.app",
     adaptiveIcon: {
       foregroundImage: "./assets/adaptive-icon.png",
       backgroundColor: "#FBFAF6",
     },
-  },
-  web: {
-    favicon: "./assets/favicon.png",
   },
   plugins: ["expo-router", "expo-secure-store", "expo-font"],
   extra: {

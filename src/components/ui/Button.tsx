@@ -9,7 +9,7 @@ import {
 import { semantic, typography, radius, spacing } from "@/theme/tokens";
 
 type Variant = "primary" | "ghost";
-type Size = "md" | "lg";
+type Size = "sm" | "md" | "lg";
 
 interface ButtonProps {
   children: string;
@@ -20,8 +20,10 @@ interface ButtonProps {
   onPress?: () => void;
 }
 
-const heights: Record<Size, number> = { md: 44, lg: 52 };
-const fontSizes: Record<Size, number> = { md: typography.scale.base, lg: typography.scale.md };
+const heights: Record<Size, number> = { sm: 34, md: 44, lg: 52 };
+const padH: Record<Size, number> = { sm: spacing[3], md: spacing[5], lg: spacing[5] };
+const radii: Record<Size, number> = { sm: radius.sm, md: radius.md, lg: radius.md };
+const fontSizes: Record<Size, number> = { sm: typography.scale.sm, md: typography.scale.base, lg: typography.scale.md };
 
 export default function Button({
   children,
@@ -35,8 +37,8 @@ export default function Button({
 
   const containerStyle: ViewStyle = {
     height: heights[size],
-    borderRadius: radius.md,
-    paddingHorizontal: spacing[5],
+    borderRadius: radii[size],
+    paddingHorizontal: padH[size],
     alignItems: "center",
     justifyContent: "center",
     backgroundColor: isPrimary ? semantic.accent : "transparent",
