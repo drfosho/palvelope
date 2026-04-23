@@ -2,16 +2,8 @@
 // Authentication → Configuration → Email:
 //   ✓ Enable email provider: ON
 //   ✓ Confirm email: OFF (for dev — mailer_autoconfirm: true)
-// Authentication → URL Configuration → Redirect URLs — add ALL of these:
-//   palvelope://
-//   exp://localhost:8081/--/
-//   exp://127.0.0.1:8081/--/
-//   exp://YOUR_LOCAL_IP:8081/--/   (run ifconfig to find your IP)
-//
-// This project uses magic link auth (email OTP is disabled server-side).
-// The user taps a link in their email which opens the app via deep link.
 
-import React, { useState, useCallback, useEffect } from "react";
+import React, { useState, useCallback } from "react";
 import {
   View,
   Text,
@@ -22,83 +14,36 @@ import {
   Platform,
   ActivityIndicator,
 } from "react-native";
-import { useRouter, useLocalSearchParams } from "expo-router";
+import { useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Feather } from "@expo/vector-icons";
-import { makeRedirectUri } from "expo-auth-session";
-import Constants from "expo-constants";
 import { BrandMark, Button, TextInput } from "@/components/ui";
 import { semantic, typography, spacing, radius } from "@/theme/tokens";
 import { supabase } from "@/lib/supabase";
 
 const ERROR_COLOR = "#B4402A";
 
-type Stage = "email" | "waiting";
-
 export default function SignIn() {
   const router = useRouter();
-  const params = useLocalSearchParams<{ email?: string; stage?: string }>();
 
-  // In Expo Go: exp://IP:PORT/--/  |  In dev build/standalone: palvelope://
-  const redirectUrl =
-    Constants.appOwnership === "expo"
-      ? makeRedirectUri({ scheme: "palvelope", path: "/" })
-      : "palvelope://";
-
-  useEffect(() => {
-    console.log("[SignIn] redirectUrl:", redirectUrl);
-  }, []);
-
-  const [stage, setStage] = useState<Stage>(
-    params.stage === "waiting" ? "waiting" : "email"
-  );
-  const [email, setEmail] = useState(params.email ?? "");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const handleSendLink = useCallback(async () => {
-    if (!email.trim()) return;
+  const canSubmit = email.trim().length > 0 && password.length > 0;
+
+  const handleSignIn = useCallback(async () => {
+    if (!canSubmit) return;
     setLoading(true);
     setError(null);
-    console.log("[SignIn] Sending magic link to:", email.trim().toLowerCase());
-    console.log("[SignIn] emailRedirectTo:", redirectUrl);
-    const { error: err } = await supabase.auth.signInWithOtp({
+    const { error: err } = await supabase.auth.signInWithPassword({
       email: email.trim().toLowerCase(),
-      options: {
-        shouldCreateUser: false,
-        emailRedirectTo: redirectUrl,
-      },
+      password,
     });
     setLoading(false);
-    if (err) {
-      console.log("[SignIn] OTP error:", err.message);
-      setError("No account found with that email. Try creating one.");
-    } else {
-      setStage("waiting");
-    }
-  }, [email, redirectUrl]);
-
-  const handleResend = useCallback(async () => {
-    setError(null);
-    setLoading(true);
-    await supabase.auth.signInWithOtp({
-      email: email.trim().toLowerCase(),
-      options: {
-        shouldCreateUser: false,
-        emailRedirectTo: redirectUrl,
-      },
-    });
-    setLoading(false);
-  }, [email, redirectUrl]);
-
-  const backAction = () => {
-    setError(null);
-    if (stage === "waiting") {
-      setStage("email");
-    } else {
-      router.back();
-    }
-  };
+    if (err) setError(err.message);
+  }, [email, password, canSubmit]);
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -110,112 +55,77 @@ export default function SignIn() {
           contentContainerStyle={styles.scroll}
           keyboardShouldPersistTaps="handled"
         >
-          <Pressable style={styles.backBtn} onPress={backAction}>
+          <Pressable style={styles.backBtn} onPress={() => router.back()}>
             <Feather name="arrow-left" size={20} color={semantic.inkMuted} />
           </Pressable>
 
           <BrandMark size={28} />
 
-          {stage === "email" ? (
-            <>
-              <Text style={styles.headline}>
-                Welcome back to{" "}
-                <Text style={styles.headlineAccent}>your desk.</Text>
-              </Text>
-              <Text style={styles.subtitle}>
-                Enter the email you signed up with. We'll send a sign-in link
-                — no passwords to remember.
-              </Text>
+          <Text style={styles.headline}>
+            Welcome back to{" "}
+            <Text style={styles.headlineAccent}>your desk.</Text>
+          </Text>
+          <Text style={styles.subtitle}>
+            Sign in with your email and password.
+          </Text>
 
-              <View style={styles.fieldGroup}>
-                <Text style={styles.label}>EMAIL</Text>
-                <TextInput
-                  value={email}
-                  onChangeText={(t) => {
-                    setEmail(t);
-                    setError(null);
-                  }}
-                  placeholder="you@example.com"
-                  keyboardType="email-address"
-                  autoCapitalize="none"
-                  autoComplete="email"
-                />
-              </View>
+          <View style={styles.fieldGroup}>
+            <Text style={styles.label}>EMAIL</Text>
+            <TextInput
+              value={email}
+              onChangeText={(t) => {
+                setEmail(t);
+                setError(null);
+              }}
+              placeholder="you@example.com"
+              keyboardType="email-address"
+              autoCapitalize="none"
+              autoComplete="email"
+            />
+          </View>
 
-              <View style={styles.privacyCard}>
-                <Feather name="lock" size={16} color={semantic.accentInk} />
-                <Text style={styles.privacyText}>
-                  We never use your email for marketing. No contact uploads, no
-                  friend-finding.
-                </Text>
-              </View>
+          <View style={styles.fieldGroup}>
+            <Text style={styles.label}>PASSWORD</Text>
+            <TextInput
+              value={password}
+              onChangeText={(t) => {
+                setPassword(t);
+                setError(null);
+              }}
+              placeholder="Your password"
+              secureTextEntry
+              autoCapitalize="none"
+              autoComplete="password"
+            />
+          </View>
 
-              <View style={styles.spacer} />
+          <View style={styles.privacyCard}>
+            <Feather name="lock" size={16} color={semantic.accentInk} />
+            <Text style={styles.privacyText}>
+              We never use your email for marketing. No contact uploads, no
+              friend-finding.
+            </Text>
+          </View>
 
-              <Button
-                full
-                disabled={!email.trim() || loading}
-                onPress={handleSendLink}
-              >
-                {loading ? "Sending\u2026" : "Send a sign-in link"}
-              </Button>
-              {loading && (
-                <ActivityIndicator
-                  color={semantic.accentInk}
-                  style={styles.spinner}
-                />
-              )}
-              {error && <Text style={styles.errorText}>{error}</Text>}
+          <View style={styles.spacer} />
 
-              <View style={styles.linkRow}>
-                <Text style={styles.linkHint}>New here? </Text>
-                <Pressable onPress={() => router.push("/(auth)/create")}>
-                  <Text style={styles.linkAction}>Create an account</Text>
-                </Pressable>
-              </View>
-            </>
-          ) : (
-            <>
-              <Text style={styles.headline}>Check your email.</Text>
-              <Text style={styles.subtitle}>
-                We sent a sign-in link to{" "}
-                <Text style={{ fontWeight: "500", color: semantic.ink }}>
-                  {email}
-                </Text>
-                . Tap the link in the email to sign in — it'll open this app
-                automatically.
-              </Text>
-
-              <View style={styles.waitingCard}>
-                <Feather name="mail" size={32} color={semantic.accentInk} />
-                <Text style={styles.waitingTitle}>Waiting for you</Text>
-                <Text style={styles.waitingBody}>
-                  Open your email app, find the message from Palvelope, and tap
-                  the sign-in link. This screen will update automatically.
-                </Text>
-                <ActivityIndicator
-                  color={semantic.accentInk}
-                  style={styles.waitingSpinner}
-                />
-              </View>
-
-              <Pressable onPress={() => setStage("email")}>
-                <Text style={styles.differentEmail}>
-                  ← Use a different email
-                </Text>
-              </Pressable>
-
-              <View style={styles.spacer} />
-
-              <Pressable onPress={handleResend} disabled={loading}>
-                <Text style={styles.resendLink}>
-                  {loading
-                    ? "Sending\u2026"
-                    : "Didn\u2019t get it? Send again"}
-                </Text>
-              </Pressable>
-            </>
+          <Button full disabled={!canSubmit || loading} onPress={handleSignIn}>
+            {loading ? "Signing in…" : "Sign in"}
+          </Button>
+          {loading && (
+            <ActivityIndicator
+              color={semantic.accentInk}
+              style={styles.spinner}
+            />
           )}
+          {error && <Text style={styles.errorText}>{error}</Text>}
+
+          <View style={styles.linkRow}>
+            <Text style={styles.linkHint}>New here? </Text>
+            <Pressable onPress={() => router.push("/(auth)/create")}>
+              <Text style={styles.linkAction}>Create an account</Text>
+            </Pressable>
+          </View>
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -308,42 +218,5 @@ const styles = StyleSheet.create({
     fontSize: typography.scale.sm,
     fontWeight: "500",
     color: semantic.accentInk,
-  },
-  waitingCard: {
-    alignItems: "center",
-    backgroundColor: semantic.surface2,
-    borderWidth: 1,
-    borderColor: semantic.ruleSoft,
-    borderRadius: radius.lg,
-    padding: spacing[6],
-    marginTop: spacing[8],
-    gap: spacing[3],
-  },
-  waitingTitle: {
-    fontFamily: typography.fontDisplay,
-    fontSize: typography.scale.lg,
-    color: semantic.ink,
-  },
-  waitingBody: {
-    fontFamily: typography.fontBody,
-    fontSize: 14,
-    color: semantic.inkMuted,
-    textAlign: "center",
-    lineHeight: 21,
-  },
-  waitingSpinner: { marginTop: spacing[2] },
-  differentEmail: {
-    fontFamily: typography.fontBody,
-    fontSize: typography.scale.sm,
-    color: semantic.inkMuted,
-    marginTop: spacing[4],
-    textAlign: "center",
-  },
-  resendLink: {
-    fontFamily: typography.fontBody,
-    fontSize: typography.scale.sm,
-    fontWeight: "500",
-    color: semantic.accentInk,
-    textAlign: "center",
   },
 });

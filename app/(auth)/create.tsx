@@ -14,8 +14,6 @@ import {
 import { useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Feather } from "@expo/vector-icons";
-import { makeRedirectUri } from "expo-auth-session";
-import Constants from "expo-constants";
 import { BrandMark, Button, Chip, TextInput } from "@/components/ui";
 import { semantic, typography, spacing } from "@/theme/tokens";
 import { supabase } from "@/lib/supabase";
@@ -33,10 +31,6 @@ const AGE_RANGES = [
 
 export default function Create() {
   const router = useRouter();
-  const redirectUrl =
-    Constants.appOwnership === "expo"
-      ? makeRedirectUri({ scheme: "palvelope", path: "/" })
-      : "palvelope://";
   const [email, setEmail] = useState("");
   const [ageRange, setAgeRange] = useState<string | null>(null);
   const [agreed, setAgreed] = useState(false);
@@ -49,37 +43,14 @@ export default function Create() {
     if (!canContinue) return;
     setError(null);
     setLoading(true);
-    // Create account via magic link — user taps link in email to confirm.
-    // Session is established by the deep link handler in _layout.tsx.
-    // _layout.tsx then checks onboarding_complete metadata and routes
-    // to onboarding since it's false.
-    const { error: err } = await supabase.auth.signInWithOtp({
+    const { data, error: err } = await supabase.auth.signUp({
       email: email.trim().toLowerCase(),
-      options: {
-        shouldCreateUser: true,
-        emailRedirectTo: redirectUrl,
-        data: {
-          age_range: ageRange,
-          onboarding_complete: false,
-        },
-      },
+      password: 'TempPass1!' + Math.random().toString(36).slice(-6),
+      options: { data: { age_range: ageRange, onboarding_complete: false } }
     });
     setLoading(false);
-    if (err) {
-      if (err.message.includes("already registered")) {
-        setError(
-          "An account with that email already exists. Try signing in."
-        );
-      } else {
-        setError(err.message);
-      }
-    } else {
-      // Magic link sent — navigate to sign-in waiting screen
-      router.push({
-        pathname: "/(auth)/sign-in",
-        params: { email: email.trim().toLowerCase(), stage: "waiting" },
-      });
-    }
+    if (data.session) router.push('/(auth)/onboarding');
+    else if (err) setError(err.message);
   }, [canContinue, email, ageRange, router]);
 
   return (
