@@ -1,8 +1,4 @@
-// TODO: Replace SAMPLE_PALS with Supabase query:
-// const { data } = await supabase.from('profiles').select('*')
-//   .eq('onboarding_complete', true).neq('id', currentUser.id)
-
-import React, { useState } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import {
   View,
   Text,
@@ -10,27 +6,209 @@ import {
   ScrollView,
   Pressable,
   Platform,
+  ActivityIndicator,
+  Animated,
+  Alert,
 } from "react-native";
 import { useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Feather } from "@expo/vector-icons";
 import { BrandMark, Avatar, Button, Chip } from "@/components/ui";
 import { semantic, colors, typography, spacing } from "@/theme/tokens";
-import SAMPLE_PALS, { type Pal } from "@/data/samplePals";
+import SAMPLE_PALS from "@/data/samplePals";
+import {
+  supabase,
+  getTodaysMatches,
+  updateMatchStatus,
+} from "@/lib/supabase";
+import {
+  getTrustSignals,
+  SAMPLE_TRUST_SIGNALS_BY_ID,
+  DEFAULT_SAMPLE_TRUST_SIGNALS,
+  TRUST_PALETTE,
+  type TrustSignal,
+  type TrustColor,
+} from "@/lib/trustSignals";
 
-const FILTERS = ["All", "Near me", "Philosophy", "Literature", "Travel", "Music"];
+// ─── Types ──────────────────────────────────────────────────────────────────
 
-const REPLY_META: Record<Pal["replyStyle"], { icon: React.ComponentProps<typeof Feather>["name"]; label: string }> = {
+type ReplyStyle = "quick" | "thoughtful" | "deep";
+
+type DisplayMatch = {
+  matchId: string | null;
+  profileId: string;
+  name: string;
+  region: string;
+  city: string;
+  hue: number;
+  interests: string[];
+  replyStyle: ReplyStyle;
+  compatibility: number;
+  isNew: boolean;
+  lastActive: string;
+  bio: string;
+  createdAt: string;
+  trustSignals: TrustSignal[];
+};
+
+type SortMode = "best" | "new";
+
+const REPLY_META: Record<
+  ReplyStyle,
+  { icon: React.ComponentProps<typeof Feather>["name"]; label: string }
+> = {
   quick: { icon: "zap", label: "Quick replies" },
   thoughtful: { icon: "coffee", label: "Thoughtful pace" },
   deep: { icon: "moon", label: "Deep letters" },
 };
 
+// ─── Helpers ────────────────────────────────────────────────────────────────
+
+function hueFromId(id: string): number {
+  return ((id.charCodeAt(0) || 0) + (id.charCodeAt(1) || 0)) % 360;
+}
+
+function todayString(): string {
+  return new Date().toISOString().split("T")[0];
+}
+
+function normalizeRealMatch(match: any): DisplayMatch {
+  const p = match.matched_profile ?? {};
+  const profileId: string = p.id ?? "";
+  return {
+    matchId: match.id,
+    profileId,
+    name: p.display_name ?? "Anonymous",
+    region: p.home_region ?? "Somewhere",
+    city: "",
+    hue: hueFromId(profileId),
+    interests: p.interests ?? [],
+    replyStyle: (p.reply_style as ReplyStyle) ?? "thoughtful",
+    compatibility: match.compatibility_score ?? 0,
+    isNew: match.batch_date === todayString(),
+    lastActive: "",
+    bio: p.bio ?? "",
+    createdAt: p.created_at ?? new Date().toISOString(),
+    trustSignals: getTrustSignals(p),
+  };
+}
+
+function sampleFallback(): DisplayMatch[] {
+  const nowIso = new Date().toISOString();
+  return SAMPLE_PALS.map((pal) => ({
+    matchId: null,
+    profileId: pal.id,
+    name: pal.name,
+    region: pal.region,
+    city: pal.city,
+    hue: pal.hue,
+    interests: pal.interests,
+    replyStyle: pal.replyStyle,
+    compatibility: pal.compatibility,
+    isNew: pal.isNew,
+    lastActive: pal.lastActive,
+    bio: pal.bio,
+    createdAt: nowIso,
+    trustSignals:
+      SAMPLE_TRUST_SIGNALS_BY_ID[pal.id] ?? DEFAULT_SAMPLE_TRUST_SIGNALS,
+  }));
+}
+
 // ─── Component ──────────────────────────────────────────────────────────────
 
 export default function Discover() {
   const router = useRouter();
-  const [activeFilter, setActiveFilter] = useState("All");
+  const [matches, setMatches] = useState<DisplayMatch[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [currentUser, setCurrentUser] = useState<any>(null);
+  const [usingSampleData, setUsingSampleData] = useState(false);
+  const [sortMode, setSortMode] = useState<SortMode>("best");
+
+  const loadMatches = useCallback(async () => {
+    setLoading(true);
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      if (!session) {
+        setMatches(sampleFallback());
+        setUsingSampleData(true);
+        setLoading(false);
+        return;
+      }
+
+      setCurrentUser(session.user);
+
+      const todaysMatches = await getTodaysMatches(session.user.id);
+
+      if (todaysMatches.length > 0) {
+        setMatches(todaysMatches.map(normalizeRealMatch));
+        setUsingSampleData(false);
+      } else {
+        const { error } = await supabase.rpc("generate_daily_matches", {
+          target_user_id: session.user.id,
+        });
+        if (!error) {
+          const fresh = await getTodaysMatches(session.user.id);
+          setMatches(fresh.map(normalizeRealMatch));
+          setUsingSampleData(false);
+        } else {
+          setMatches(sampleFallback());
+          setUsingSampleData(true);
+        }
+      }
+    } catch (e) {
+      console.error("loadMatches error:", e);
+      setMatches(sampleFallback());
+      setUsingSampleData(true);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadMatches();
+  }, [loadMatches]);
+
+  // ── Sort ────────────────────────────────────────────────────────────────
+  const sortedMatches = [...matches].sort((a, b) => {
+    if (sortMode === "best") return b.compatibility - a.compatibility;
+    return (
+      new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    );
+  });
+
+  // ── Pass / accept ───────────────────────────────────────────────────────
+  const removeMatch = (profileId: string) => {
+    setMatches((prev) => prev.filter((m) => m.profileId !== profileId));
+  };
+
+  const handlePass = async (match: DisplayMatch) => {
+    if (match.matchId) {
+      updateMatchStatus(match.matchId, "passed").catch((e) =>
+        console.warn("updateMatchStatus passed failed:", e)
+      );
+    }
+    removeMatch(match.profileId);
+  };
+
+  const handleWrite = async (match: DisplayMatch) => {
+    if (match.matchId) {
+      updateMatchStatus(match.matchId, "accepted").catch((e) =>
+        console.warn("updateMatchStatus accepted failed:", e)
+      );
+    }
+    router.push({
+      pathname: "/chat/[id]",
+      params: {
+        id: match.profileId,
+        name: match.name,
+        hue: String(match.hue),
+      },
+    });
+  };
+
+  // ── Render ──────────────────────────────────────────────────────────────
 
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
@@ -46,37 +224,112 @@ export default function Discover() {
       <View style={styles.headerText}>
         <Text style={styles.heading}>People writing today</Text>
         <Text style={styles.headingSub}>
-          Matched to your interests &middot; Updated every few hours
+          Matched to your interests &middot; A small, curated batch
         </Text>
       </View>
 
-      {/* ── Filter chips ───────────────────────────────────────────── */}
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={styles.filterRow}
-      >
-        {FILTERS.map((f) => (
-          <Chip
-            key={f}
-            label={f}
-            size="sm"
-            selected={activeFilter === f}
-            onPress={() => setActiveFilter(f)}
-          />
-        ))}
-      </ScrollView>
+      {/* ── Sort toggle ────────────────────────────────────────────── */}
+      <View style={styles.sortRow}>
+        <Chip
+          label="Best match"
+          size="sm"
+          selected={sortMode === "best"}
+          onPress={() => setSortMode("best")}
+        />
+        <Chip
+          label="Newest first"
+          size="sm"
+          selected={sortMode === "new"}
+          onPress={() => setSortMode("new")}
+        />
+      </View>
 
-      {/* ── Card list ──────────────────────────────────────────────── */}
-      <ScrollView
-        contentContainerStyle={styles.cardList}
-        showsVerticalScrollIndicator={false}
-      >
-        {SAMPLE_PALS.map((pal) => (
-          <MatchCard key={pal.id} pal={pal} router={router} />
-        ))}
-      </ScrollView>
+      {usingSampleData && !loading && (
+        <Text style={styles.sampleNote}>showing sample profiles</Text>
+      )}
+
+      {/* ── Body ───────────────────────────────────────────────────── */}
+      {loading ? (
+        <View style={styles.loaderWrap}>
+          <ActivityIndicator color={semantic.accentInk} />
+        </View>
+      ) : matches.length === 0 ? (
+        <EmptyState onRefresh={loadMatches} />
+      ) : (
+        <ScrollView
+          contentContainerStyle={styles.cardList}
+          showsVerticalScrollIndicator={false}
+        >
+          {/* Batch header */}
+          <View style={styles.batchHeader}>
+            <Feather name="star" size={14} color={semantic.accentInk} />
+            <Text style={styles.batchHeaderText}>
+              Your {sortedMatches.length} matches for today
+            </Text>
+            <Text style={styles.batchHeaderRight}>Refreshes daily</Text>
+          </View>
+
+          {sortedMatches.map((match) => (
+            <MatchCard
+              key={match.profileId}
+              match={match}
+              onPass={() => handlePass(match)}
+              onWrite={() => handleWrite(match)}
+              onOpenProfile={() =>
+                router.push({
+                  pathname: "/pal/[id]",
+                  params: {
+                    id: match.profileId,
+                    name: match.name,
+                    hue: String(match.hue),
+                  },
+                })
+              }
+            />
+          ))}
+
+          {/* Footer */}
+          <View style={styles.footer}>
+            <Text style={styles.footerTitle}>That’s everyone for today.</Text>
+            <Text style={styles.footerSub}>
+              Come back tomorrow for a fresh batch.
+            </Text>
+            <View style={styles.footerBtn}>
+              <Button
+                variant="ghost"
+                size="sm"
+                onPress={() =>
+                  Alert.alert(
+                    "Past matches",
+                    "Past matches will be browsable soon."
+                  )
+                }
+              >
+                Browse past matches
+              </Button>
+            </View>
+          </View>
+        </ScrollView>
+      )}
     </SafeAreaView>
+  );
+}
+
+// ─── Empty state ────────────────────────────────────────────────────────────
+
+function EmptyState({ onRefresh }: { onRefresh: () => void }) {
+  return (
+    <View style={styles.emptyWrap}>
+      <BrandMark size={28} />
+      <Text style={styles.emptyTitle}>Your matches are on their way.</Text>
+      <Text style={styles.emptySub}>
+        We find people based on your interests and pace. Check back soon — or
+        invite a friend.
+      </Text>
+      <View style={styles.emptyBtn}>
+        <Button onPress={onRefresh}>Refresh</Button>
+      </View>
+    </View>
   );
 }
 
@@ -96,49 +349,85 @@ function IconButton({
   );
 }
 
+// ─── Trust signal pill ──────────────────────────────────────────────────────
+
+function TrustPill({ signal }: { signal: TrustSignal }) {
+  const palette = trustPillPalette(signal.color);
+  return (
+    <View style={[styles.trustPill, { backgroundColor: palette.bg }]}>
+      <Feather
+        name={signal.icon as React.ComponentProps<typeof Feather>["name"]}
+        size={10}
+        color={palette.fg}
+      />
+      <Text style={[styles.trustPillText, { color: palette.fg }]}>
+        {signal.label}
+      </Text>
+    </View>
+  );
+}
+
+function trustPillPalette(color: TrustColor): { bg: string; fg: string } {
+  if (color === "blue") {
+    return { bg: semantic.accentSoft, fg: semantic.accentInk };
+  }
+  return TRUST_PALETTE[color];
+}
+
 // ─── Match Card ─────────────────────────────────────────────────────────────
 
 function MatchCard({
-  pal,
-  router,
+  match,
+  onPass,
+  onWrite,
+  onOpenProfile,
 }: {
-  pal: Pal;
-  router: ReturnType<typeof useRouter>;
+  match: DisplayMatch;
+  onPass: () => void;
+  onWrite: () => void;
+  onOpenProfile: () => void;
 }) {
-  const reply = REPLY_META[pal.replyStyle];
-  const visibleInterests = pal.interests.slice(0, 3);
-  const extraCount = pal.interests.length - 3;
+  const reply = REPLY_META[match.replyStyle];
+  const visibleInterests = match.interests.slice(0, 3);
+  const extraCount = match.interests.length - 3;
+  const opacity = useRef(new Animated.Value(1)).current;
 
-  const openPalProfile = () =>
-    router.push({
-      pathname: "/pal/[id]",
-      params: { id: pal.id, name: pal.name, hue: String(pal.hue) },
-    });
+  const fadeAndPass = () => {
+    Animated.timing(opacity, {
+      toValue: 0,
+      duration: 200,
+      useNativeDriver: true,
+    }).start(() => onPass());
+  };
+
+  const location = match.city
+    ? `${match.city} · ${match.region}`
+    : match.region;
 
   return (
-    <View style={styles.card}>
-      {/* Top row — avatar tappable to pal profile */}
+    <Animated.View style={[styles.card, { opacity }]}>
+      {/* Top row */}
       <View style={styles.cardTopRow}>
-        <Pressable onPress={openPalProfile}>
-          <Avatar name={pal.name} size="lg" hue={pal.hue} />
+        <Pressable onPress={onOpenProfile}>
+          <Avatar name={match.name} size="lg" hue={match.hue} />
         </Pressable>
-        {pal.isNew ? (
+        {match.isNew ? (
           <View style={styles.newBadge}>
             <Text style={styles.newBadgeText}>NEW</Text>
           </View>
         ) : (
           <View style={styles.matchBadge}>
-            <Text style={styles.matchBadgeText}>{pal.compatibility}% match</Text>
+            <Text style={styles.matchBadgeText}>
+              {match.compatibility}% match
+            </Text>
           </View>
         )}
       </View>
 
-      {/* Name + location — tappable to pal profile */}
-      <Pressable onPress={openPalProfile} style={styles.nameRow}>
-        <Text style={styles.palName}>{pal.name}</Text>
-        <Text style={styles.palLocation}>
-          {pal.city} &middot; {pal.region}
-        </Text>
+      {/* Name + location */}
+      <Pressable onPress={onOpenProfile} style={styles.nameRow}>
+        <Text style={styles.palName}>{match.name}</Text>
+        <Text style={styles.palLocation}>{location}</Text>
       </Pressable>
 
       {/* Reply style pill */}
@@ -147,8 +436,17 @@ function MatchCard({
         <Text style={styles.replyPillText}>{reply.label}</Text>
       </View>
 
+      {/* Trust signals */}
+      {match.trustSignals.length > 0 && (
+        <View style={styles.trustRow}>
+          {match.trustSignals.map((s) => (
+            <TrustPill key={s.label} signal={s} />
+          ))}
+        </View>
+      )}
+
       {/* Bio */}
-      <Text style={styles.bio}>{pal.bio}</Text>
+      {match.bio ? <Text style={styles.bio}>{match.bio}</Text> : null}
 
       {/* Interest chips */}
       <View style={styles.interestRow}>
@@ -169,25 +467,19 @@ function MatchCard({
 
       {/* Bottom action row */}
       <View style={styles.actionRow}>
-        <Text style={styles.lastActive}>Active {pal.lastActive}</Text>
+        <Text style={styles.lastActive}>
+          {match.lastActive ? `Active ${match.lastActive}` : ""}
+        </Text>
         <View style={styles.actionBtns}>
-          <Button variant="ghost" size="sm" onPress={() => {}}>
+          <Button variant="ghost" size="sm" onPress={fadeAndPass}>
             Pass
           </Button>
-          <Button
-            size="sm"
-            onPress={() =>
-              router.push({
-                pathname: "/chat/[id]",
-                params: { id: pal.id, name: pal.name, hue: String(pal.hue) },
-              })
-            }
-          >
+          <Button size="sm" onPress={onWrite}>
             Write a letter →
           </Button>
         </View>
       </View>
-    </View>
+    </Animated.View>
   );
 }
 
@@ -237,22 +529,88 @@ const styles = StyleSheet.create({
     color: semantic.inkMuted,
     marginTop: spacing[1],
   },
-  filterRow: {
-    paddingLeft: spacing[5],
-    paddingRight: spacing[2],
-    paddingTop: spacing[3],
-    paddingBottom: spacing[3],
-    gap: spacing[2],
+
+  sortRow: {
+    flexDirection: "row",
+    marginHorizontal: 20,
+    marginTop: 12,
+    gap: 8,
   },
+  sampleNote: {
+    fontFamily: typography.fontBody,
+    fontSize: 12,
+    color: semantic.inkSoft,
+    textAlign: "center",
+    marginTop: spacing[2],
+  },
+
+  loaderWrap: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+
+  // Empty state
+  emptyWrap: {
+    alignItems: "center",
+    paddingTop: 60,
+    paddingHorizontal: spacing[6],
+  },
+  emptyTitle: {
+    fontFamily: typography.fontDisplay,
+    fontSize: 20,
+    color: semantic.ink,
+    marginTop: spacing[4],
+    textAlign: "center",
+  },
+  emptySub: {
+    fontFamily: typography.fontBody,
+    fontSize: 14,
+    color: semantic.inkMuted,
+    marginTop: 8,
+    maxWidth: 260,
+    textAlign: "center",
+    lineHeight: 20,
+  },
+  emptyBtn: {
+    marginTop: 20,
+  },
+
+  // Card list
   cardList: {
     paddingTop: spacing[1],
     paddingBottom: spacing[8],
   },
+
+  // Batch header
+  batchHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    backgroundColor: semantic.surface2,
+    borderRadius: 14,
+    padding: 12,
+    marginTop: 16,
+    marginHorizontal: 20,
+  },
+  batchHeaderText: {
+    flex: 1,
+    fontFamily: typography.fontBody,
+    fontSize: 13,
+    color: semantic.ink,
+  },
+  batchHeaderRight: {
+    fontFamily: typography.fontBody,
+    fontSize: 11,
+    color: semantic.inkSoft,
+  },
+
+  // Card
   card: {
     backgroundColor: semantic.surface,
     borderRadius: spacing[5],
     marginHorizontal: spacing[5],
-    marginBottom: 14,
+    marginTop: 14,
     padding: 18,
     ...Platform.select({
       ios: {
@@ -330,6 +688,28 @@ const styles = StyleSheet.create({
     fontSize: typography.scale.xs,
     color: semantic.inkMuted,
   },
+
+  // Trust signals
+  trustRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 6,
+    marginTop: spacing[2],
+  },
+  trustPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    borderRadius: 99,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+  trustPillText: {
+    fontFamily: typography.fontBody,
+    fontSize: 11,
+    fontWeight: "500",
+  },
+
   bio: {
     fontFamily: typography.fontBody,
     fontSize: 14,
@@ -374,5 +754,29 @@ const styles = StyleSheet.create({
   actionBtns: {
     flexDirection: "row",
     gap: 10,
+  },
+
+  // Batch footer
+  footer: {
+    alignItems: "center",
+    marginTop: 8,
+    marginBottom: 32,
+    paddingHorizontal: spacing[6],
+  },
+  footerTitle: {
+    fontFamily: typography.fontDisplay,
+    fontSize: 17,
+    color: semantic.inkMuted,
+    textAlign: "center",
+  },
+  footerSub: {
+    fontFamily: typography.fontBody,
+    fontSize: 13,
+    color: semantic.inkSoft,
+    marginTop: 6,
+    textAlign: "center",
+  },
+  footerBtn: {
+    marginTop: 16,
   },
 });

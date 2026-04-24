@@ -14,6 +14,14 @@ import { Feather } from "@expo/vector-icons";
 import { Avatar, Button } from "@/components/ui";
 import { semantic, colors, typography, spacing, radius } from "@/theme/tokens";
 import SAMPLE_PALS, { type Pal } from "@/data/samplePals";
+import {
+  getTrustSignals,
+  SAMPLE_TRUST_SIGNALS_BY_ID,
+  DEFAULT_SAMPLE_TRUST_SIGNALS,
+  TRUST_PALETTE,
+  type TrustSignal,
+  type TrustColor,
+} from "@/lib/trustSignals";
 
 // ─── Config ─────────────────────────────────────────────────────────────────
 
@@ -103,6 +111,22 @@ export default function PalProfile() {
         {pal && (
           <View style={styles.card}>
             <Text style={styles.bioText}>{pal.bio}</Text>
+
+            {/* Trust signals */}
+            {(() => {
+              const signals =
+                SAMPLE_TRUST_SIGNALS_BY_ID[pal.id] ??
+                DEFAULT_SAMPLE_TRUST_SIGNALS;
+              if (signals.length === 0) return null;
+              return (
+                <View style={styles.trustRow}>
+                  {signals.map((s) => (
+                    <TrustPill key={s.label} signal={s} />
+                  ))}
+                </View>
+              );
+            })()}
+
             <View style={styles.cardDivider} />
             <Text style={styles.monoLabel}>INTERESTS</Text>
             <View style={styles.chipGrid}>
@@ -158,6 +182,31 @@ export default function PalProfile() {
         </View>
         <View style={styles.headerBorder} />
       </BlurView>
+    </View>
+  );
+}
+
+// ─── Trust pill ─────────────────────────────────────────────────────────────
+
+function trustPillPalette(color: TrustColor): { bg: string; fg: string } {
+  if (color === "blue") {
+    return { bg: semantic.accentSoft, fg: semantic.accentInk };
+  }
+  return TRUST_PALETTE[color];
+}
+
+function TrustPill({ signal }: { signal: TrustSignal }) {
+  const palette = trustPillPalette(signal.color);
+  return (
+    <View style={[styles.trustPill, { backgroundColor: palette.bg }]}>
+      <Feather
+        name={signal.icon as React.ComponentProps<typeof Feather>["name"]}
+        size={10}
+        color={palette.fg}
+      />
+      <Text style={[styles.trustPillText, { color: palette.fg }]}>
+        {signal.label}
+      </Text>
     </View>
   );
 }
@@ -270,6 +319,25 @@ const styles = StyleSheet.create({
     fontSize: typography.scale.base,
     color: semantic.ink,
     lineHeight: 24,
+  },
+  trustRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 6,
+    marginTop: spacing[3],
+  },
+  trustPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    borderRadius: 99,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+  trustPillText: {
+    fontFamily: typography.fontBody,
+    fontSize: 11,
+    fontWeight: "500",
   },
   cardDivider: {
     height: 1,
