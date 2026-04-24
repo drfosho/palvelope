@@ -8,13 +8,19 @@ import {
   Alert,
   Platform,
   ActivityIndicator,
+  TextInput,
 } from "react-native";
 import { useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Feather } from "@expo/vector-icons";
-import { Avatar } from "@/components/ui";
+import { Avatar, Button } from "@/components/ui";
 import { semantic, colors, typography, spacing } from "@/theme/tokens";
-import { supabase, getProfile, type Profile } from "@/lib/supabase";
+import {
+  supabase,
+  getProfile,
+  updateProfile,
+  type Profile,
+} from "@/lib/supabase";
 
 // ─── Config ─────────────────────────────────────────────────────────────────
 
@@ -39,11 +45,14 @@ const REPLY_META: Record<
   deep: { icon: "moon", label: "Deep letters" },
 };
 
-const ACCOUNT_ROWS: {
+interface AccountRow {
   icon: React.ComponentProps<typeof Feather>["name"];
   label: string;
-}[] = [
-  { icon: "mail", label: "Email & notifications" },
+  route?: string;
+}
+
+const ACCOUNT_ROWS: AccountRow[] = [
+  { icon: "mail", label: "Email & notifications", route: "/notification-preferences" },
   { icon: "lock", label: "Privacy settings" },
   { icon: "shield", label: "Safety & blocking" },
   { icon: "help-circle", label: "Help & feedback" },
@@ -55,6 +64,11 @@ export default function ProfileScreen() {
   const router = useRouter();
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(true);
+
+  const [isEditing, setIsEditing] = useState(false);
+  const [editingName, setEditingName] = useState("");
+  const [editingBio, setEditingBio] = useState("");
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     const loadProfile = async () => {
@@ -87,6 +101,53 @@ export default function ProfileScreen() {
     // _layout.tsx auth listener will redirect to welcome
   };
 
+  const enterEdit = () => {
+    setEditingName(profile?.display_name ?? "");
+    setEditingBio(profile?.bio ?? "");
+    setIsEditing(true);
+  };
+
+  const cancelEdit = () => {
+    setIsEditing(false);
+    setEditingName("");
+    setEditingBio("");
+  };
+
+  const saveEdit = async () => {
+    if (!profile) return;
+    setSaving(true);
+    const { error } = await updateProfile({
+      id: profile.id,
+      display_name: editingName.trim() || null,
+      bio: editingBio.trim() || null,
+    });
+    if (error) {
+      console.error("[profile] save failed:", error);
+      Alert.alert("Couldn’t save", error.message);
+      setSaving(false);
+      return;
+    }
+    const fresh = await getProfile(profile.id);
+    setProfile(fresh);
+    setSaving(false);
+    setIsEditing(false);
+  };
+
+  const handleAvatarPress = () => {
+    // TODO: integrate expo-image-picker for real photo upload,
+    // then upload to Supabase Storage and store the URL on profile.avatar_url.
+    Alert.alert(
+      "Photo upload coming soon",
+      "We’ll add this in a future update."
+    );
+  };
+
+  const handleAccountRowPress = (row: AccountRow) => {
+    if (row.route) {
+      router.push(row.route as any);
+    }
+  };
+
   if (loading) {
     return (
       <SafeAreaView style={styles.safe} edges={["top"]}>
@@ -106,52 +167,92 @@ export default function ProfileScreen() {
         {/* Header */}
         <View style={styles.headerRow}>
           <Text style={styles.heading}>Your desk</Text>
-          <Pressable style={styles.iconBtn} onPress={() => {}}>
-            <Feather name="settings" size={18} color={semantic.inkMuted} />
-          </Pressable>
+          <View style={styles.headerBtns}>
+            {!isEditing && (
+              <Pressable
+                style={styles.iconBtn}
+                onPress={enterEdit}
+                hitSlop={6}
+              >
+                <Feather name="edit-2" size={18} color={semantic.inkMuted} />
+              </Pressable>
+            )}
+            <Pressable style={styles.iconBtn} onPress={() => {}}>
+              <Feather name="settings" size={18} color={semantic.inkMuted} />
+            </Pressable>
+          </View>
         </View>
 
         {/* Profile card */}
         <View style={styles.profileCard}>
           <View style={styles.profileTop}>
-            <Avatar name={displayName} size="xl" />
+            {isEditing ? (
+              <Pressable onPress={handleAvatarPress} style={styles.avatarWrap}>
+                <Avatar name={editingName || "?"} size="xl" />
+                <View style={styles.avatarOverlay}>
+                  <Feather name="camera" size={20} color="#FFFFFF" />
+                </View>
+              </Pressable>
+            ) : (
+              <Avatar name={displayName} size="xl" />
+            )}
             <View style={styles.profileInfo}>
-              <Text style={styles.profileName}>{displayName}</Text>
+              {isEditing ? (
+                <TextInput
+                  style={styles.nameInput}
+                  value={editingName}
+                  onChangeText={setEditingName}
+                  placeholder="Display name"
+                  placeholderTextColor={semantic.inkSoft}
+                  autoFocus
+                  maxLength={50}
+                />
+              ) : (
+                <Text style={styles.profileName}>{displayName}</Text>
+              )}
 
-              {showLocation && homeRegion && (
+              {!isEditing && showLocation && homeRegion && (
                 <View style={styles.locationRow}>
                   <Feather name="map-pin" size={12} color={semantic.inkMuted} />
                   <Text style={styles.locationText}>{homeRegion}</Text>
                 </View>
               )}
 
-              <View style={styles.anonBadge}>
-                <Feather
-                  name={anonMeta.icon}
-                  size={10}
-                  color={semantic.inkMuted}
-                />
-                <Text style={styles.anonBadgeText}>{anonMeta.label}</Text>
-              </View>
+              {!isEditing && (
+                <View style={styles.anonBadge}>
+                  <Feather
+                    name={anonMeta.icon}
+                    size={10}
+                    color={semantic.inkMuted}
+                  />
+                  <Text style={styles.anonBadgeText}>{anonMeta.label}</Text>
+                </View>
+              )}
             </View>
           </View>
 
           {/* Bio */}
           <View style={styles.section}>
             <Text style={styles.monoLabel}>BIO</Text>
-            <Pressable
-              onPress={() =>
-                Alert.alert("Coming soon", "Edit bio coming soon")
-              }
-            >
-              {bio ? (
-                <Text style={styles.bioText}>{bio}</Text>
-              ) : (
+            {isEditing ? (
+              <TextInput
+                style={styles.bioInput}
+                value={editingBio}
+                onChangeText={setEditingBio}
+                placeholder="Write a short bio for your pen pals…"
+                placeholderTextColor={semantic.inkSoft}
+                multiline
+                maxLength={280}
+              />
+            ) : bio ? (
+              <Text style={styles.bioText}>{bio}</Text>
+            ) : (
+              <Pressable onPress={enterEdit}>
                 <Text style={styles.bioPlaceholder}>
                   Tap to add a bio — your pen pals will see this.
                 </Text>
-              )}
-            </Pressable>
+              </Pressable>
+            )}
           </View>
 
           {/* Interests */}
@@ -184,6 +285,28 @@ export default function ProfileScreen() {
           </View>
         </View>
 
+        {/* Save / Cancel row */}
+        {isEditing && (
+          <View style={styles.saveRow}>
+            <View style={styles.saveBtnWrap}>
+              <Button full variant="ghost" onPress={cancelEdit}>
+                Cancel
+              </Button>
+            </View>
+            <View style={styles.saveBtnWrap}>
+              {saving ? (
+                <View style={styles.savingPlaceholder}>
+                  <ActivityIndicator color={semantic.accentFg} />
+                </View>
+              ) : (
+                <Button full onPress={saveEdit}>
+                  Save
+                </Button>
+              )}
+            </View>
+          </View>
+        )}
+
         {/* Stats */}
         <View style={styles.statsRow}>
           <StatTile value="0" label="Letters sent" />
@@ -196,7 +319,10 @@ export default function ProfileScreen() {
         <View style={styles.listCard}>
           {ACCOUNT_ROWS.map((row, i) => (
             <React.Fragment key={row.label}>
-              <Pressable style={styles.listRow} onPress={() => {}}>
+              <Pressable
+                style={styles.listRow}
+                onPress={() => handleAccountRowPress(row)}
+              >
                 <Feather name={row.icon} size={18} color={semantic.accentInk} />
                 <Text style={styles.listRowText}>{row.label}</Text>
                 <Feather
@@ -265,6 +391,10 @@ const styles = StyleSheet.create({
     paddingTop: spacing[4],
     marginBottom: spacing[4],
   },
+  headerBtns: {
+    flexDirection: "row",
+    gap: spacing[2],
+  },
   heading: {
     fontFamily: typography.fontDisplay,
     fontSize: 22,
@@ -297,11 +427,35 @@ const styles = StyleSheet.create({
     }),
   },
   profileTop: { flexDirection: "row", alignItems: "center" },
+  avatarWrap: {
+    position: "relative",
+  },
+  avatarOverlay: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    borderRadius: 32,
+    backgroundColor: "rgba(19, 15, 10, 0.45)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
   profileInfo: { flex: 1, marginLeft: 14, gap: spacing[1] },
   profileName: {
     fontFamily: typography.fontDisplay,
     fontSize: 22,
     color: semantic.ink,
+  },
+  nameInput: {
+    fontFamily: typography.fontDisplay,
+    fontSize: 22,
+    color: semantic.ink,
+    backgroundColor: semantic.surface2,
+    borderWidth: 1,
+    borderColor: semantic.rule,
+    borderRadius: 10,
+    padding: 8,
   },
   locationRow: {
     flexDirection: "row",
@@ -351,6 +505,19 @@ const styles = StyleSheet.create({
     fontStyle: "italic",
     color: semantic.inkSoft,
   },
+  bioInput: {
+    fontFamily: typography.fontBody,
+    fontSize: 14,
+    color: semantic.ink,
+    backgroundColor: semantic.surface2,
+    borderWidth: 1,
+    borderColor: semantic.rule,
+    borderRadius: 12,
+    padding: 12,
+    minHeight: 80,
+    maxHeight: 160,
+    textAlignVertical: "top",
+  },
   chipGrid: { flexDirection: "row", flexWrap: "wrap", gap: 6 },
   displayChip: {
     backgroundColor: semantic.surface2,
@@ -375,6 +542,22 @@ const styles = StyleSheet.create({
     fontFamily: typography.fontBody,
     fontSize: typography.scale.sm,
     color: semantic.ink,
+  },
+  saveRow: {
+    flexDirection: "row",
+    gap: 10,
+    marginTop: 12,
+    marginHorizontal: 20,
+  },
+  saveBtnWrap: {
+    flex: 1,
+  },
+  savingPlaceholder: {
+    height: 44,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: semantic.accent,
   },
   statsRow: {
     flexDirection: "row",

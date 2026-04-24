@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect, useMemo } from "react";
 import {
   View,
   Text,
@@ -9,7 +9,8 @@ import {
   Platform,
   TextInput as RNTextInput,
   Animated,
-  Dimensions,
+  Modal,
+  ActivityIndicator,
 } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -20,41 +21,95 @@ import AIFlagModal from "@/components/AIFlagModal";
 import SAMPLE_PALS from "@/data/samplePals";
 import type { ReplyStyle } from "@/stores/onboardingStore";
 import { semantic, colors, typography, spacing, radius } from "@/theme/tokens";
+import {
+  supabase,
+  getOrCreateConversation,
+  getMessages,
+  sendMessage,
+  getProfile,
+  type Message,
+  type Profile,
+} from "@/lib/supabase";
 
 // ─── One-off semantic colors (not in main tokens) ──────────────────────────
 const FLAG_AMBER = "#C4870A"; // warm amber for AI flag
 const ACTIVE_GREEN = "#5CB065"; // green dot for online status
+const REVEAL_GREEN = "#2F8A4F"; // ≈ oklch(0.40 0.12 150), reveal success check
 
-// ─── Types ──────────────────────────────────────────────────────────────────
+// ─── Local-mode sender markers (used when palId is not a real UUID) ─────────
+const LOCAL_ME = "__local_me";
+const LOCAL_THEM = "__local_them";
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-interface Message {
-  id: string;
-  who: "me" | "them";
-  text: string;
-  time: string;
-  aiFlag?: boolean;
+// ─── Sample data per pal (local-mode fallback) ──────────────────────────────
+
+function localMessage(
+  id: string,
+  isMe: boolean,
+  content: string,
+  hhmm: string,
+  aiFlag = false
+): Message {
+  const [h, m] = hhmm.split(":").map((n) => parseInt(n, 10));
+  const d = new Date();
+  d.setHours(h, m, 0, 0);
+  return {
+    id,
+    conversation_id: "__local__",
+    sender_id: isMe ? LOCAL_ME : LOCAL_THEM,
+    content,
+    created_at: d.toISOString(),
+    read_at: null,
+    ai_flagged: aiFlag,
+    ai_flag_reason: null,
+  };
 }
 
-// ─── Sample data per pal ────────────────────────────────────────────────────
-
 const MIRA_MESSAGES: Message[] = [
-  { id: "1", who: "them", text: "I\u2019ve been thinking about your last letter for days.\n\nThat line about tea cooling while you read \u2014 it caught me off guard. I think I do the same thing, and I\u2019d never named it.", time: "09:12" },
-  { id: "2", who: "me", text: "It\u2019s funny. I almost didn\u2019t send that letter. I thought it was too small a thing to write about.", time: "09:24" },
-  { id: "3", who: "them", text: "The small things are the point, I think. I\u2019m glad you sent it.", time: "09:31" },
-  { id: "4", who: "them", text: "Here is a question I\u2019ve been sitting with:\n\nWhat is something you\u2019ve believed for a long time that you\u2019re starting to unbelieve?", time: "09:32", aiFlag: true },
-  { id: "5", who: "me", text: "That I have to finish every book I start. I\u2019m learning to put them down.", time: "09:38" },
+  localMessage(
+    "1",
+    false,
+    "I’ve been thinking about your last letter for days.\n\nThat line about tea cooling while you read — it caught me off guard. I think I do the same thing, and I’d never named it.",
+    "09:12"
+  ),
+  localMessage(
+    "2",
+    true,
+    "It’s funny. I almost didn’t send that letter. I thought it was too small a thing to write about.",
+    "09:24"
+  ),
+  localMessage(
+    "3",
+    false,
+    "The small things are the point, I think. I’m glad you sent it.",
+    "09:31"
+  ),
+  localMessage(
+    "4",
+    false,
+    "Here is a question I’ve been sitting with:\n\nWhat is something you’ve believed for a long time that you’re starting to unbelieve?",
+    "09:32",
+    true
+  ),
+  localMessage(
+    "5",
+    true,
+    "That I have to finish every book I start. I’m learning to put them down.",
+    "09:38"
+  ),
 ];
 
 const OPENER_PROMPTS: string[] = [
-  "What\u2019s something small that made your day better recently?",
-  "What\u2019s something you\u2019ve been thinking about lately that you haven\u2019t said out loud yet?",
-  "Is there something you used to believe that you\u2019ve quietly stopped believing?",
+  "What’s something small that made your day better recently?",
+  "What’s something you’ve been thinking about lately that you haven’t said out loud yet?",
+  "Is there something you used to believe that you’ve quietly stopped believing?",
   "What does your ideal slow morning look like?",
-  "What\u2019s a place you\u2019ve been that changed how you see things?",
-  "What are you in the middle of right now \u2014 a book, a project, a decision?",
-  "What\u2019s something you\u2019re quietly proud of that most people don\u2019t know about?",
+  "What’s a place you’ve been that changed how you see things?",
+  "What are you in the middle of right now — a book, a project, a decision?",
+  "What’s something you’re quietly proud of that most people don’t know about?",
   "What kind of person do you find it easiest to talk to?",
-  "What\u2019s something you do differently than most people you know?",
+  "What’s something you do differently than most people you know?",
   "What would you want a pen pal to know about you before your first letter?",
 ];
 
@@ -62,6 +117,12 @@ const REPLY_STYLE_PROMPT_INDEX: Record<ReplyStyle, number> = {
   quick: 0,
   thoughtful: 1,
   deep: 2,
+};
+
+const REPLY_STYLE_LABEL: Record<ReplyStyle, string> = {
+  quick: "Quick replies",
+  thoughtful: "Thoughtful pace",
+  deep: "Deep letters",
 };
 
 const PAL_INFO: Record<string, { city: string; localTime: string }> = {
@@ -74,6 +135,57 @@ const PAL_INFO: Record<string, { city: string; localTime: string }> = {
 
 const HEADER_HEIGHT = 88;
 
+// ─── Reveal items config ────────────────────────────────────────────────────
+
+type RevealKey = "name" | "region" | "interests" | "pace";
+
+interface RevealItem {
+  key: RevealKey;
+  icon: React.ComponentProps<typeof Feather>["name"];
+  label: string;
+  getValue: (p: Profile | null) => string;
+}
+
+const REVEAL_ITEMS: RevealItem[] = [
+  {
+    key: "name",
+    icon: "user",
+    label: "Your display name",
+    getValue: (p) => p?.display_name ?? "Hidden",
+  },
+  {
+    key: "region",
+    icon: "map-pin",
+    label: "Your region",
+    getValue: (p) => p?.home_region ?? "Hidden",
+  },
+  {
+    key: "interests",
+    icon: "book-open",
+    label: "Your interests",
+    getValue: (p) =>
+      p?.interests && p.interests.length > 0
+        ? p.interests.join(", ")
+        : "Tap to share your interest list",
+  },
+  {
+    key: "pace",
+    icon: "coffee",
+    label: "Your writing pace",
+    getValue: (p) =>
+      p?.reply_style ? REPLY_STYLE_LABEL[p.reply_style] : "Hidden",
+  },
+];
+
+// ─── Helpers ────────────────────────────────────────────────────────────────
+
+function formatTime(iso: string): string {
+  const d = new Date(iso);
+  const h = String(d.getHours()).padStart(2, "0");
+  const m = String(d.getMinutes()).padStart(2, "0");
+  return `${h}:${m}`;
+}
+
 // ─── Component ──────────────────────────────────────────────────────────────
 
 export default function ChatScreen() {
@@ -84,22 +196,29 @@ export default function ChatScreen() {
   }>();
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const scrollRef = useRef<ScrollView>(null);
+  const scrollViewRef = useRef<ScrollView>(null);
 
+  const palId = typeof id === "string" ? id : "";
   const palName = name ?? "Pal";
   const palHue = hueParam ? parseInt(hueParam, 10) : undefined;
-  const palInfo = PAL_INFO[id ?? ""] ?? { city: "Somewhere", localTime: "noon" };
+  const palInfo = PAL_INFO[palId] ?? { city: "Somewhere", localTime: "noon" };
 
-  const [messages, setMessages] = useState<Message[]>(
-    id === "1" ? MIRA_MESSAGES : []
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [conversationId, setConversationId] = useState<string | null>(null);
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const [currentUserProfile, setCurrentUserProfile] = useState<Profile | null>(
+    null
   );
+  const [loading, setLoading] = useState(true);
+  const [localMode, setLocalMode] = useState(false);
+
   const [draft, setDraft] = useState("");
   const [aiModalVisible, setAiModalVisible] = useState(false);
   const [showPasteToast, setShowPasteToast] = useState(false);
   const toastOpacity = useRef(new Animated.Value(0)).current;
 
   // ── Opener / nudges state ───────────────────────────────────────────────
-  const pal = SAMPLE_PALS.find((p) => p.id === id);
+  const pal = SAMPLE_PALS.find((p) => p.id === palId);
   const palReplyStyle: ReplyStyle = pal?.replyStyle ?? "thoughtful";
   const [openerDismissed, setOpenerDismissed] = useState(false);
   const [promptIndex, setPromptIndex] = useState<number>(
@@ -108,15 +227,133 @@ export default function ChatScreen() {
   const [dismissedNudges, setDismissedNudges] = useState<number[]>([]);
   const composeInputRef = useRef<RNTextInput>(null);
 
-  const isNewConversation = messages.length === 0 && !openerDismissed;
+  // ── Reveal state ────────────────────────────────────────────────────────
+  const [revealSheetVisible, setRevealSheetVisible] = useState(false);
+  const [revealedItems, setRevealedItems] = useState<Set<RevealKey>>(
+    () => new Set()
+  );
+
+  const isNewConversation =
+    messages.length === 0 && !loading && !openerDismissed;
   const currentPrompt = OPENER_PROMPTS[promptIndex];
 
-  const myMessageCount = messages.filter((m) => m.who === "me").length;
+  const myMessageCount = useMemo(
+    () =>
+      messages.filter((m) =>
+        localMode
+          ? m.sender_id === LOCAL_ME
+          : currentUserId !== null && m.sender_id === currentUserId
+      ).length,
+    [messages, currentUserId, localMode]
+  );
   const activeNudge: 1 | 2 | null = (() => {
     if (myMessageCount === 1 && !dismissedNudges.includes(1)) return 1;
     if (myMessageCount === 2 && !dismissedNudges.includes(2)) return 2;
     return null;
   })();
+
+  // ── Setup: load session, conversation, messages, subscribe ───────────────
+  useEffect(() => {
+    let cancelled = false;
+    let channel: ReturnType<typeof supabase.channel> | null = null;
+
+    const setup = async () => {
+      setLoading(true);
+
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      if (!session) {
+        if (cancelled) return;
+        console.warn(
+          "[chat] no session — falling back to local Mira messages"
+        );
+        setLocalMode(true);
+        setMessages(palId === "1" ? MIRA_MESSAGES : []);
+        setLoading(false);
+        return;
+      }
+      if (cancelled) return;
+      setCurrentUserId(session.user.id);
+
+      // Best-effort fetch of current user profile for reveal display
+      getProfile(session.user.id)
+        .then((p) => {
+          if (!cancelled) setCurrentUserProfile(p);
+        })
+        .catch(() => {});
+
+      // If palId isn't a UUID, skip Supabase entirely — we're in sample land
+      if (!UUID_RE.test(palId)) {
+        console.warn(
+          "[chat] palId is not a UUID, using local-only mode:",
+          palId
+        );
+        setLocalMode(true);
+        setMessages(palId === "1" ? MIRA_MESSAGES : []);
+        setLoading(false);
+        return;
+      }
+
+      const convoId = await getOrCreateConversation(session.user.id, palId);
+      if (cancelled) return;
+      if (!convoId) {
+        console.warn(
+          "[chat] getOrCreateConversation returned null — local mode"
+        );
+        setLocalMode(true);
+        setMessages(palId === "1" ? MIRA_MESSAGES : []);
+        setLoading(false);
+        return;
+      }
+
+      setConversationId(convoId);
+
+      const existing = await getMessages(convoId);
+      if (cancelled) return;
+      setMessages(existing as Message[]);
+      setLoading(false);
+
+      // Subscribe to new messages via Realtime
+      channel = supabase
+        .channel(`conversation:${convoId}`)
+        .on(
+          "postgres_changes" as any,
+          {
+            event: "INSERT",
+            schema: "public",
+            table: "messages",
+            filter: `conversation_id=eq.${convoId}`,
+          },
+          (payload: any) => {
+            const newMsg = payload.new as Message;
+            setMessages((prev) => {
+              if (prev.find((m) => m.id === newMsg.id)) return prev;
+              return [...prev, newMsg];
+            });
+            requestAnimationFrame(() =>
+              scrollViewRef.current?.scrollToEnd({ animated: true })
+            );
+          }
+        )
+        .subscribe();
+    };
+
+    setup();
+
+    return () => {
+      cancelled = true;
+      if (channel) supabase.removeChannel(channel);
+    };
+  }, [palId]);
+
+  // Auto-scroll on messages change
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      scrollViewRef.current?.scrollToEnd({ animated: true });
+    }, 100);
+    return () => clearTimeout(timer);
+  }, [messages.length]);
 
   const handleShufflePrompt = () => {
     setPromptIndex((i) => (i + 1) % OPENER_PROMPTS.length);
@@ -127,7 +364,7 @@ export default function ChatScreen() {
     setOpenerDismissed(true);
     setTimeout(() => {
       composeInputRef.current?.focus();
-      scrollRef.current?.scrollToEnd({ animated: true });
+      scrollViewRef.current?.scrollToEnd({ animated: true });
     }, 50);
   };
 
@@ -142,40 +379,102 @@ export default function ChatScreen() {
     );
   };
 
-  // Auto-scroll on new messages
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      scrollRef.current?.scrollToEnd({ animated: true });
-    }, 100);
-    return () => clearTimeout(timer);
-  }, [messages.length]);
-
   // ── Paste toast ──────────────────────────────────────────────────────────
   // TODO: Wire real paste detection via Clipboard listener or TextInput onPaste
-  // For now, expose triggerPasteToast for testing.
   const triggerPasteToast = () => {
     setShowPasteToast(true);
     Animated.sequence([
-      Animated.timing(toastOpacity, { toValue: 1, duration: 200, useNativeDriver: true }),
+      Animated.timing(toastOpacity, {
+        toValue: 1,
+        duration: 200,
+        useNativeDriver: true,
+      }),
       Animated.delay(3500),
-      Animated.timing(toastOpacity, { toValue: 0, duration: 300, useNativeDriver: true }),
+      Animated.timing(toastOpacity, {
+        toValue: 0,
+        duration: 300,
+        useNativeDriver: true,
+      }),
     ]).start(() => setShowPasteToast(false));
   };
 
   // ── Send ─────────────────────────────────────────────────────────────────
-  const handleSend = () => {
+  const handleSend = async () => {
     if (!draft.trim()) return;
-    const now = new Date();
-    const timeStr = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
-    setMessages((prev) => [
-      ...prev,
-      { id: String(Date.now()), who: "me", text: draft.trim(), time: timeStr },
-    ]);
+    const content = draft.trim();
     setDraft("");
+
+    // Local-mode (sample pal / no session): optimistic add, no network
+    if (localMode || !conversationId || !currentUserId) {
+      const optimistic: Message = {
+        id: `local-${Date.now()}`,
+        conversation_id: conversationId ?? "__local__",
+        sender_id: localMode ? LOCAL_ME : currentUserId ?? LOCAL_ME,
+        content,
+        created_at: new Date().toISOString(),
+        read_at: null,
+        ai_flagged: false,
+        ai_flag_reason: null,
+      };
+      setMessages((prev) => [...prev, optimistic]);
+      requestAnimationFrame(() =>
+        scrollViewRef.current?.scrollToEnd({ animated: true })
+      );
+      return;
+    }
+
+    const optimistic: Message = {
+      id: `temp-${Date.now()}`,
+      conversation_id: conversationId,
+      sender_id: currentUserId,
+      content,
+      created_at: new Date().toISOString(),
+      read_at: null,
+      ai_flagged: false,
+      ai_flag_reason: null,
+    };
+    setMessages((prev) => [...prev, optimistic]);
+    requestAnimationFrame(() =>
+      scrollViewRef.current?.scrollToEnd({ animated: true })
+    );
+
+    const { data, error } = await sendMessage(
+      conversationId,
+      currentUserId,
+      content
+    );
+    if (error) {
+      setMessages((prev) => prev.filter((m) => m.id !== optimistic.id));
+      console.error("Send failed:", error);
+    } else if (data) {
+      setMessages((prev) =>
+        prev.map((m) => (m.id === optimistic.id ? (data as Message) : m))
+      );
+    }
   };
+
+  const toggleReveal = (key: RevealKey) => {
+    setRevealedItems((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+    // TODO: wire sharing logic — send a system message or update a
+    // shared_reveals table so the pal can see what has been revealed.
+  };
+
+  const revealedLabels = REVEAL_ITEMS.filter((i) => revealedItems.has(i.key))
+    .map((i) => i.label.replace(/^Your /, ""))
+    .join(", ");
 
   const headerTop = insets.top;
   const composeBottomPad = insets.bottom + 10;
+
+  const isMessageMine = (m: Message) =>
+    localMode
+      ? m.sender_id === LOCAL_ME
+      : currentUserId !== null && m.sender_id === currentUserId;
 
   return (
     <View style={styles.container}>
@@ -184,7 +483,16 @@ export default function ChatScreen() {
         behavior={Platform.OS === "ios" ? "padding" : "height"}
         keyboardVerticalOffset={0}
       >
-        {isNewConversation ? (
+        {loading ? (
+          <View
+            style={[
+              styles.loadingWrap,
+              { paddingTop: headerTop + HEADER_HEIGHT },
+            ]}
+          >
+            <ActivityIndicator color={semantic.accent} />
+          </View>
+        ) : isNewConversation ? (
           <OpenerPanel
             palName={palName}
             palHue={palHue}
@@ -196,7 +504,7 @@ export default function ChatScreen() {
           />
         ) : (
           <ScrollView
-            ref={scrollRef}
+            ref={scrollViewRef}
             contentContainerStyle={[
               styles.messageList,
               { paddingTop: headerTop + HEADER_HEIGHT + spacing[5] },
@@ -212,11 +520,22 @@ export default function ChatScreen() {
               </Text>
             </View>
 
+            {/* Shared reveals card */}
+            {revealedItems.size > 0 && (
+              <View style={styles.revealedCard}>
+                <Feather name="unlock" size={12} color={semantic.accentInk} />
+                <Text style={styles.revealedText} numberOfLines={2}>
+                  You’ve shared: {revealedLabels}
+                </Text>
+              </View>
+            )}
+
             {/* Messages */}
             {messages.map((msg) => (
               <MessageBubble
                 key={msg.id}
                 message={msg}
+                isMe={isMessageMine(msg)}
                 onFlagPress={() => setAiModalVisible(true)}
               />
             ))}
@@ -224,7 +543,7 @@ export default function ChatScreen() {
         )}
 
         {/* Quality nudge */}
-        {!isNewConversation && activeNudge !== null && (
+        {!isNewConversation && !loading && activeNudge !== null && (
           <NudgeBar
             kind={activeNudge}
             onDismiss={() => dismissNudge(activeNudge)}
@@ -232,7 +551,7 @@ export default function ChatScreen() {
         )}
 
         {/* Compose bar */}
-        {!isNewConversation && (
+        {!isNewConversation && !loading && (
           <View style={[styles.composeBar, { paddingBottom: composeBottomPad }]}>
             <View style={styles.composeInner}>
               <RNTextInput
@@ -240,7 +559,7 @@ export default function ChatScreen() {
                 style={styles.composeInput}
                 value={draft}
                 onChangeText={setDraft}
-                placeholder="Write something real\u2026"
+                placeholder="Write something real…"
                 placeholderTextColor={semantic.inkSoft}
                 multiline
                 maxLength={5000}
@@ -291,6 +610,14 @@ export default function ChatScreen() {
             </View>
           </View>
 
+          <Pressable
+            style={styles.shareBtn}
+            onPress={() => setRevealSheetVisible(true)}
+            hitSlop={6}
+          >
+            <Feather name="unlock" size={13} color={semantic.inkMuted} />
+          </Pressable>
+
           <Pressable style={styles.moreBtn} onPress={() => {}}>
             <Feather
               name="more-horizontal"
@@ -321,6 +648,15 @@ export default function ChatScreen() {
       <AIFlagModal
         visible={aiModalVisible}
         onClose={() => setAiModalVisible(false)}
+      />
+
+      {/* ── Reveal sheet ─────────────────────────────────────────────── */}
+      <RevealSheet
+        visible={revealSheetVisible}
+        onClose={() => setRevealSheetVisible(false)}
+        profile={currentUserProfile}
+        revealedItems={revealedItems}
+        onToggle={toggleReveal}
       />
     </View>
   );
@@ -411,13 +747,13 @@ function NudgeBar({
 
 function MessageBubble({
   message,
+  isMe,
   onFlagPress,
 }: {
   message: Message;
+  isMe: boolean;
   onFlagPress: () => void;
 }) {
-  const isMe = message.who === "me";
-
   return (
     <View
       style={[
@@ -425,19 +761,14 @@ function MessageBubble({
         { alignItems: isMe ? "flex-end" : "flex-start" },
       ]}
     >
-      <View
-        style={[
-          styles.bubble,
-          isMe ? styles.bubbleMe : styles.bubbleThem,
-        ]}
-      >
+      <View style={[styles.bubble, isMe ? styles.bubbleMe : styles.bubbleThem]}>
         <Text
           style={[
             styles.bubbleText,
             { color: isMe ? semantic.accentFg : semantic.ink },
           ]}
         >
-          {message.text}
+          {message.content}
         </Text>
       </View>
       <Text
@@ -446,11 +777,11 @@ function MessageBubble({
           { alignSelf: isMe ? "flex-end" : "flex-start" },
         ]}
       >
-        {message.time}
+        {formatTime(message.created_at)}
       </Text>
 
       {/* AI flag */}
-      {message.aiFlag && (
+      {message.ai_flagged && (
         <Pressable style={styles.aiFlagRow} onPress={onFlagPress}>
           <Feather name="alert-triangle" size={12} color={FLAG_AMBER} />
           <Text style={styles.aiFlagText}>
@@ -460,6 +791,83 @@ function MessageBubble({
         </Pressable>
       )}
     </View>
+  );
+}
+
+// ─── Reveal Sheet ───────────────────────────────────────────────────────────
+
+function RevealSheet({
+  visible,
+  onClose,
+  profile,
+  revealedItems,
+  onToggle,
+}: {
+  visible: boolean;
+  onClose: () => void;
+  profile: Profile | null;
+  revealedItems: Set<RevealKey>;
+  onToggle: (key: RevealKey) => void;
+}) {
+  return (
+    <Modal
+      visible={visible}
+      onRequestClose={onClose}
+      animationType="slide"
+      presentationStyle="pageSheet"
+    >
+      <View style={styles.sheetContainer}>
+        <View style={styles.sheetHandle} />
+        <Text style={styles.sheetTitle}>Share a little more</Text>
+        <Text style={styles.sheetSubtitle}>
+          Choose what to reveal. You can always share more later.
+        </Text>
+
+        <View style={styles.revealList}>
+          {REVEAL_ITEMS.map((item) => {
+            const revealed = revealedItems.has(item.key);
+            return (
+              <Pressable
+                key={item.key}
+                style={styles.revealRow}
+                onPress={() => onToggle(item.key)}
+              >
+                <Feather
+                  name={item.icon}
+                  size={16}
+                  color={semantic.accentInk}
+                />
+                <View style={styles.revealRowMid}>
+                  <Text style={styles.revealLabel}>{item.label}</Text>
+                  <Text style={styles.revealValue} numberOfLines={1}>
+                    {item.getValue(profile)}
+                  </Text>
+                </View>
+                {revealed ? (
+                  <Feather
+                    name="check-circle"
+                    size={14}
+                    color={REVEAL_GREEN}
+                  />
+                ) : (
+                  <Feather
+                    name="chevron-right"
+                    size={14}
+                    color={semantic.inkSoft}
+                  />
+                )}
+              </Pressable>
+            );
+          })}
+        </View>
+
+        <View style={styles.sheetFooter}>
+          <Button full variant="ghost" onPress={onClose}>
+            Done
+          </Button>
+        </View>
+      </View>
+    </Modal>
   );
 }
 
@@ -474,6 +882,11 @@ const styles = StyleSheet.create({
   },
   flex: {
     flex: 1,
+  },
+  loadingWrap: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
   },
 
   // Header
@@ -528,6 +941,16 @@ const styles = StyleSheet.create({
     fontSize: 11.5,
     color: semantic.inkSoft,
   },
+  shareBtn: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: semantic.surface2,
+    borderWidth: 1,
+    borderColor: semantic.rule,
+  },
   moreBtn: {
     width: 32,
     height: 32,
@@ -558,6 +981,25 @@ const styles = StyleSheet.create({
     fontFamily: MONO_FONT,
     fontSize: typography.scale.xs,
     color: semantic.inkSoft,
+  },
+
+  // Revealed card
+  revealedCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    backgroundColor: semantic.surface2,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    marginHorizontal: spacing[4],
+    marginBottom: spacing[2],
+  },
+  revealedText: {
+    flex: 1,
+    fontFamily: typography.fontBody,
+    fontSize: 12,
+    color: semantic.inkMuted,
   },
 
   // Bubbles
@@ -786,5 +1228,63 @@ const styles = StyleSheet.create({
     fontSize: typography.scale.sm,
     color: semantic.ink,
     textAlign: "center",
+  },
+
+  // Reveal sheet
+  sheetContainer: {
+    flex: 1,
+    backgroundColor: semantic.bg,
+    paddingHorizontal: spacing[5],
+    paddingTop: spacing[3],
+  },
+  sheetHandle: {
+    alignSelf: "center",
+    width: 36,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: semantic.rule,
+    marginBottom: spacing[4],
+  },
+  sheetTitle: {
+    fontFamily: typography.fontDisplay,
+    fontSize: 20,
+    color: semantic.ink,
+  },
+  sheetSubtitle: {
+    fontFamily: typography.fontBody,
+    fontSize: 13,
+    color: semantic.inkMuted,
+    marginTop: spacing[1],
+  },
+  revealList: {
+    marginTop: 20,
+    gap: 10,
+  },
+  revealRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    backgroundColor: semantic.surface2,
+    borderRadius: 14,
+    padding: 14,
+  },
+  revealRowMid: {
+    flex: 1,
+    gap: 2,
+  },
+  revealLabel: {
+    fontFamily: typography.fontBody,
+    fontSize: 14,
+    color: semantic.ink,
+  },
+  revealValue: {
+    fontFamily: typography.fontBody,
+    fontSize: 13,
+    color: semantic.inkMuted,
+  },
+  sheetFooter: {
+    marginTop: "auto",
+    paddingBottom: spacing[6],
+    paddingTop: spacing[4],
   },
 });

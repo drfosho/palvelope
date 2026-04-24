@@ -1,0 +1,16 @@
+-- Run this in Supabase SQL editor when ready to sync notification preferences
+-- create table public.notification_preferences (
+--   id uuid default gen_random_uuid() primary key,
+--   user_id uuid references auth.users(id) on delete cascade unique not null,
+--   new_letter boolean default true,
+--   letter_replied boolean default true,
+--   new_match boolean default true,
+--   match_accepted boolean default true,
+--   reply_reminder boolean default false,
+--   daily_batch boolean default true,
+--   updated_at timestamptz default now()
+-- );
+-- alter table public.notification_preferences enable row level security;
+-- create policy "Users manage own preferences"
+--   on public.notification_preferences for all
+--   using (auth.uid() = user_id) with check (auth.uid() = user_id);

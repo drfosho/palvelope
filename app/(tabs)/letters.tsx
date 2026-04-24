@@ -1,21 +1,22 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   View,
   Text,
   StyleSheet,
   ScrollView,
   Pressable,
-  Platform,
+  ActivityIndicator,
 } from "react-native";
 import { useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Feather } from "@expo/vector-icons";
 import { Avatar, BrandMark, Button, Chip } from "@/components/ui";
 import { semantic, typography, spacing } from "@/theme/tokens";
+import { supabase, getConversations } from "@/lib/supabase";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
-interface Thread {
+interface DisplayThread {
   id: string;
   palId: string;
   name: string;
@@ -27,27 +28,138 @@ interface Thread {
   draft: boolean;
 }
 
-// ─── Sample data ────────────────────────────────────────────────────────────
+// ─── Sample fallback (only shown if getConversations throws) ────────────────
 
-const SAMPLE_THREADS: Thread[] = [
-  { id: "1", palId: "1", name: "Mira K.", hue: 210, region: "Europe", lastMessage: "The small things are the point, I think. I\u2019m glad you sent it.", time: "09:31", unread: true, draft: false },
-  { id: "2", palId: "2", name: "T.J.", hue: 145, region: "East Asia", lastMessage: "I\u2019ve been walking the old canal district every morning this week.", time: "Yesterday", unread: false, draft: false },
-  { id: "3", palId: "4", name: "S\u00F8ren", hue: 260, region: "Europe", lastMessage: "Draft saved \u2014 finish your letter", time: "2d ago", unread: false, draft: true },
+const SAMPLE_THREADS: DisplayThread[] = [
+  { id: "1", palId: "1", name: "Mira K.", hue: 210, region: "Europe", lastMessage: "The small things are the point, I think. I’m glad you sent it.", time: "09:31", unread: true, draft: false },
+  { id: "2", palId: "2", name: "T.J.", hue: 145, region: "East Asia", lastMessage: "I’ve been walking the old canal district every morning this week.", time: "Yesterday", unread: false, draft: false },
+  { id: "3", palId: "4", name: "Søren", hue: 260, region: "Europe", lastMessage: "Draft saved — finish your letter", time: "2d ago", unread: false, draft: true },
   { id: "4", palId: "5", name: "Lena B.", hue: 340, region: "Americas", lastMessage: "What a strange and beautiful question that was.", time: "3d ago", unread: false, draft: false },
-  { id: "5", palId: "6", name: "Rafi", hue: 180, region: "Middle East", lastMessage: "Sent you a recipe. It\u2019s my grandmother\u2019s.", time: "5d ago", unread: false, draft: false },
+  { id: "5", palId: "6", name: "Rafi", hue: 180, region: "Middle East", lastMessage: "Sent you a recipe. It’s my grandmother’s.", time: "5d ago", unread: false, draft: false },
 ];
 
 const FILTERS = ["All", "Unread", "Writing back", "Archived"];
 
-const unreadCount = SAMPLE_THREADS.filter((t) => t.unread).length;
+// ─── Helpers ────────────────────────────────────────────────────────────────
+
+function hueFromId(id: string): number {
+  return ((id.charCodeAt(0) || 0) + (id.charCodeAt(1) || 0)) % 360;
+}
+
+function formatThreadTime(iso: string | null | undefined): string {
+  if (!iso) return "";
+  const then = new Date(iso);
+  const now = new Date();
+  const startOfToday = new Date(
+    now.getFullYear(),
+    now.getMonth(),
+    now.getDate()
+  );
+  const startOfThen = new Date(
+    then.getFullYear(),
+    then.getMonth(),
+    then.getDate()
+  );
+  const msInDay = 24 * 60 * 60 * 1000;
+  const dayDiff = Math.round(
+    (startOfToday.getTime() - startOfThen.getTime()) / msInDay
+  );
+  if (dayDiff <= 0) {
+    const h = String(then.getHours()).padStart(2, "0");
+    const m = String(then.getMinutes()).padStart(2, "0");
+    return `${h}:${m}`;
+  }
+  if (dayDiff === 1) return "Yesterday";
+  return `${dayDiff}d ago`;
+}
+
+function normalizeConversation(convo: any, currentUserId: string): DisplayThread {
+  const otherProfile =
+    convo.participant_1 === currentUserId
+      ? convo.participant_2_profile
+      : convo.participant_1_profile;
+  const profileId = otherProfile?.id ?? "";
+  return {
+    id: convo.id,
+    palId: profileId,
+    name: otherProfile?.display_name ?? "Anonymous",
+    hue: hueFromId(profileId),
+    region: otherProfile?.home_region ?? "",
+    lastMessage: convo.last_message_preview ?? "No messages yet",
+    time: formatThreadTime(convo.last_message_at),
+    unread: false,
+    draft: false,
+  };
+}
 
 // ─── Component ──────────────────────────────────────────────────────────────
 
 export default function Letters() {
   const router = useRouter();
   const [activeFilter, setActiveFilter] = useState("All");
+  const [conversations, setConversations] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const [usingSampleData, setUsingSampleData] = useState(false);
 
-  const hasThreads = SAMPLE_THREADS.length > 0;
+  useEffect(() => {
+    let cancelled = false;
+    let channel: ReturnType<typeof supabase.channel> | null = null;
+
+    const load = async () => {
+      try {
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+        if (!session) {
+          if (cancelled) return;
+          setUsingSampleData(true);
+          setLoading(false);
+          return;
+        }
+        if (cancelled) return;
+        setCurrentUserId(session.user.id);
+
+        const convos = await getConversations(session.user.id);
+        if (cancelled) return;
+        setConversations(convos);
+        setUsingSampleData(false);
+        setLoading(false);
+      } catch (e) {
+        console.error("[letters] getConversations failed:", e);
+        if (cancelled) return;
+        setUsingSampleData(true);
+        setLoading(false);
+      }
+    };
+
+    load();
+
+    channel = supabase
+      .channel("conversations-list")
+      .on(
+        "postgres_changes" as any,
+        { event: "UPDATE", schema: "public", table: "conversations" },
+        () => {
+          load();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      cancelled = true;
+      if (channel) supabase.removeChannel(channel);
+    };
+  }, []);
+
+  const threads: DisplayThread[] = usingSampleData
+    ? SAMPLE_THREADS
+    : currentUserId
+    ? conversations.map((c) => normalizeConversation(c, currentUserId))
+    : [];
+
+  const unreadCount = threads.filter((t) => t.unread).length;
+  const hasThreads = threads.length > 0;
 
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
@@ -56,8 +168,12 @@ export default function Letters() {
         <View>
           <Text style={styles.heading}>Your letters</Text>
           <Text style={styles.headingSub}>
-            {SAMPLE_THREADS.length} conversations &middot; {unreadCount} unread
+            {threads.length} conversations
+            {unreadCount > 0 ? ` · ${unreadCount} unread` : ""}
           </Text>
+          {usingSampleData && (
+            <Text style={styles.sampleNote}>Showing sample data</Text>
+          )}
         </View>
         <Pressable style={styles.iconBtn} onPress={() => {}}>
           <Feather name="edit" size={18} color={semantic.inkMuted} />
@@ -81,20 +197,28 @@ export default function Letters() {
         ))}
       </ScrollView>
 
-      {hasThreads ? (
+      {loading ? (
+        <View style={styles.loadingWrap}>
+          <ActivityIndicator color={semantic.accent} />
+        </View>
+      ) : hasThreads ? (
         <ScrollView
           contentContainerStyle={styles.list}
           showsVerticalScrollIndicator={false}
         >
-          {SAMPLE_THREADS.map((thread, i) => (
+          {threads.map((thread, i) => (
             <ThreadRow
               key={thread.id}
               thread={thread}
-              isLast={i === SAMPLE_THREADS.length - 1}
+              isLast={i === threads.length - 1}
               onPress={() =>
                 router.push({
                   pathname: "/chat/[id]",
-                  params: { id: thread.palId, name: thread.name, hue: String(thread.hue) },
+                  params: {
+                    id: thread.palId,
+                    name: thread.name,
+                    hue: String(thread.hue),
+                  },
                 })
               }
             />
@@ -114,7 +238,7 @@ function ThreadRow({
   isLast,
   onPress,
 }: {
-  thread: Thread;
+  thread: DisplayThread;
   isLast: boolean;
   onPress: () => void;
 }) {
@@ -207,6 +331,13 @@ const styles = StyleSheet.create({
     color: semantic.inkMuted,
     marginTop: spacing[1],
   },
+  sampleNote: {
+    fontFamily: typography.fontBody,
+    fontSize: typography.scale.xs,
+    color: semantic.inkSoft,
+    marginTop: 2,
+    fontStyle: "italic",
+  },
   iconBtn: {
     width: 32,
     height: 32,
@@ -226,6 +357,11 @@ const styles = StyleSheet.create({
   },
   list: {
     paddingBottom: spacing[8],
+  },
+  loadingWrap: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
   },
 
   // Thread row
