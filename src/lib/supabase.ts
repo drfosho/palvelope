@@ -71,6 +71,7 @@ export type Profile = {
   display_name: string | null;
   bio: string | null;
   interests: string[];
+  intents: string[];
   anonymity_level: "anonymous" | "pen_name" | "open";
   reply_style: "quick" | "thoughtful" | "deep";
   home_region: string | null;
@@ -80,6 +81,7 @@ export type Profile = {
   created_at: string;
   updated_at: string;
 };
+// -- Add column: alter table profiles add column if not exists intents text[] default '{}';
 
 export type Conversation = {
   id: string;

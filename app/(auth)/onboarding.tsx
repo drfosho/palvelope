@@ -25,7 +25,7 @@ import { supabase, updateProfile } from "@/lib/supabase";
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
-const STEPS = ["intro", "interests", "anonymity", "replyStyle", "region"] as const;
+const STEPS = ["intent", "intro", "interests", "anonymity", "replyStyle", "region"] as const;
 const TOTAL_STEPS = STEPS.length;
 
 const INTERESTS = [
@@ -36,6 +36,51 @@ const INTERESTS = [
 ];
 const MAX_INTERESTS = 6;
 const MIN_INTERESTS = 2;
+
+const INTENT_OPTIONS: {
+  key: string;
+  icon: React.ComponentProps<typeof Feather>["name"];
+  title: string;
+  subtitle: string;
+}[] = [
+  {
+    key: "global_friendship",
+    icon: "globe",
+    title: "Global friendship",
+    subtitle: "Meet someone real from another country or culture",
+  },
+  {
+    key: "thoughtful_conversation",
+    icon: "message-circle",
+    title: "Thoughtful conversation",
+    subtitle: "Slow down and actually talk. No small talk.",
+  },
+  {
+    key: "language_practice",
+    icon: "book-open",
+    title: "Language practice",
+    subtitle: "Write with someone who speaks a language I’m learning",
+  },
+  {
+    key: "cultural_exchange",
+    icon: "compass",
+    title: "Cultural exchange",
+    subtitle: "Share where I’m from. Learn where they’re from.",
+  },
+  {
+    key: "low_pressure",
+    icon: "shield",
+    title: "Low-pressure connection",
+    subtitle: "Anonymous-friendly. No expectations, no agenda.",
+  },
+  {
+    key: "pen_pal_tradition",
+    icon: "heart",
+    title: "Pen-pal tradition",
+    subtitle: "Old-school letter writing energy. Minus the stamps.",
+  },
+];
+const MAX_INTENTS = 3;
 
 const ANONYMITY_OPTIONS: {
   key: AnonymityLevel;
@@ -95,6 +140,7 @@ const REGIONS = [
 ];
 
 const STEP_META: { title: string; subtitle: string }[] = [
+  { title: "What brings you here", subtitle: "This shapes who we introduce you to. Pick everything that fits." },
   { title: "Your name", subtitle: "This is how your first letters will be signed." },
   { title: "What moves you", subtitle: "Pick a few \u2014 we match on the overlap, never on the obvious." },
   { title: "How should others see you", subtitle: "You can change this later, message by message." },
@@ -103,6 +149,74 @@ const STEP_META: { title: string; subtitle: string }[] = [
 ];
 
 // ─── Step components (defined outside Onboarding to avoid remount) ──────────
+
+function StepIntent({
+  intents,
+  toggleIntent,
+}: {
+  intents: string[];
+  toggleIntent: (key: string) => void;
+}) {
+  const atMax = intents.length >= MAX_INTENTS;
+  return (
+    <View style={styles.stepContent}>
+      {INTENT_OPTIONS.map((opt) => {
+        const selected = intents.includes(opt.key);
+        const disabled = atMax && !selected;
+        return (
+          <IntentCard
+            key={opt.key}
+            icon={opt.icon}
+            title={opt.title}
+            subtitle={opt.subtitle}
+            selected={selected}
+            disabled={disabled}
+            onPress={() => toggleIntent(opt.key)}
+          />
+        );
+      })}
+      <Text style={styles.helperText}>
+        {intents.length} of {MAX_INTENTS} selected
+      </Text>
+    </View>
+  );
+}
+
+function IntentCard({
+  icon,
+  title,
+  subtitle,
+  selected,
+  disabled,
+  onPress,
+}: {
+  icon: React.ComponentProps<typeof Feather>["name"];
+  title: string;
+  subtitle: string;
+  selected: boolean;
+  disabled?: boolean;
+  onPress: () => void;
+}) {
+  return (
+    <Pressable
+      style={[
+        styles.intentCard,
+        selected ? styles.intentCardSelected : styles.intentCardDefault,
+        disabled && { opacity: 0.4 },
+      ]}
+      disabled={disabled}
+      onPress={onPress}
+    >
+      <View style={styles.intentIcon}>
+        <Feather name={icon} size={20} color={semantic.accentInk} />
+      </View>
+      <View style={styles.intentText}>
+        <Text style={styles.intentTitle}>{title}</Text>
+        <Text style={styles.intentSubtitle}>{subtitle}</Text>
+      </View>
+    </Pressable>
+  );
+}
 
 function StepIntro({
   name,
@@ -383,6 +497,7 @@ export default function Onboarding() {
         id: user.id,
         display_name: storeData.name,
         interests: storeData.interests,
+        intents: storeData.intents,
         anonymity_level: storeData.anonymity,
         reply_style: storeData.replyStyle,
         home_region: storeData.homeRegion,
@@ -431,14 +546,16 @@ export default function Onboarding() {
   const canContinue = (() => {
     switch (currentStep) {
       case 0:
-        return store.name.trim().length >= 2;
+        return store.intents.length >= 1;
       case 1:
-        return store.interests.length >= MIN_INTERESTS;
+        return store.name.trim().length >= 2;
       case 2:
-        return true;
+        return store.interests.length >= MIN_INTERESTS;
       case 3:
         return true;
       case 4:
+        return true;
+      case 5:
         return store.homeRegion !== null;
       default:
         return false;
@@ -456,6 +573,20 @@ export default function Onboarding() {
         store.setInterests(current.filter((i) => i !== interest));
       } else if (current.length < MAX_INTERESTS) {
         store.setInterests([...current, interest]);
+      }
+    },
+    [store]
+  );
+
+  // ─── Intent toggle ────────────────────────────────────────────────────
+
+  const toggleIntent = useCallback(
+    (key: string) => {
+      const current = store.intents;
+      if (current.includes(key)) {
+        store.setIntents(current.filter((k) => k !== key));
+      } else if (current.length < MAX_INTENTS) {
+        store.setIntents([...current, key]);
       }
     },
     [store]
@@ -487,6 +618,13 @@ export default function Onboarding() {
     switch (currentStep) {
       case 0:
         return (
+          <StepIntent
+            intents={store.intents}
+            toggleIntent={toggleIntent}
+          />
+        );
+      case 1:
+        return (
           <StepIntro
             name={store.name}
             setName={store.setName}
@@ -494,28 +632,28 @@ export default function Onboarding() {
             setShowLocation={store.setShowLocation}
           />
         );
-      case 1:
+      case 2:
         return (
           <StepInterests
             interests={store.interests}
             toggleInterest={toggleInterest}
           />
         );
-      case 2:
+      case 3:
         return (
           <StepAnonymity
             anonymity={store.anonymity}
             setAnonymity={store.setAnonymity}
           />
         );
-      case 3:
+      case 4:
         return (
           <StepReplyStyle
             replyStyle={store.replyStyle}
             setReplyStyle={store.setReplyStyle}
           />
         );
-      case 4:
+      case 5:
         return (
           <StepRegion
             homeRegion={store.homeRegion}
@@ -700,5 +838,43 @@ const styles = StyleSheet.create({
     fontSize: typography.scale.sm,
     color: semantic.inkMuted,
     lineHeight: 18,
+  },
+  intentCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    borderRadius: 16,
+    padding: 16,
+    gap: 14,
+  },
+  intentCardDefault: {
+    backgroundColor: semantic.surface,
+    borderWidth: 1,
+    borderColor: semantic.rule,
+  },
+  intentCardSelected: {
+    backgroundColor: semantic.accentSoft,
+    borderWidth: 1.5,
+    borderColor: semantic.accentInk,
+  },
+  intentIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 12,
+    backgroundColor: semantic.accentSoft,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  intentText: { flex: 1, gap: 2 },
+  intentTitle: {
+    fontFamily: typography.fontBody,
+    fontSize: 15,
+    fontWeight: "500",
+    color: semantic.ink,
+  },
+  intentSubtitle: {
+    fontFamily: typography.fontBody,
+    fontSize: 13,
+    color: semantic.inkMuted,
+    lineHeight: 13 * 1.4,
   },
 });

@@ -15,8 +15,10 @@ import { useLocalSearchParams, useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { BlurView } from "expo-blur";
 import { Feather } from "@expo/vector-icons";
-import { Avatar } from "@/components/ui";
+import { Avatar, Button } from "@/components/ui";
 import AIFlagModal from "@/components/AIFlagModal";
+import SAMPLE_PALS from "@/data/samplePals";
+import type { ReplyStyle } from "@/stores/onboardingStore";
 import { semantic, colors, typography, spacing, radius } from "@/theme/tokens";
 
 // ─── One-off semantic colors (not in main tokens) ──────────────────────────
@@ -43,10 +45,24 @@ const MIRA_MESSAGES: Message[] = [
   { id: "5", who: "me", text: "That I have to finish every book I start. I\u2019m learning to put them down.", time: "09:38" },
 ];
 
-const GENERIC_MESSAGES: Message[] = [
-  { id: "1", who: "them", text: "Hello! Really glad we were matched. I read your interests and I think we\u2019ll have plenty to talk about.", time: "10:00" },
-  { id: "2", who: "me", text: "Same here! I noticed we both picked Literature. What are you reading right now?", time: "10:15" },
+const OPENER_PROMPTS: string[] = [
+  "What\u2019s something small that made your day better recently?",
+  "What\u2019s something you\u2019ve been thinking about lately that you haven\u2019t said out loud yet?",
+  "Is there something you used to believe that you\u2019ve quietly stopped believing?",
+  "What does your ideal slow morning look like?",
+  "What\u2019s a place you\u2019ve been that changed how you see things?",
+  "What are you in the middle of right now \u2014 a book, a project, a decision?",
+  "What\u2019s something you\u2019re quietly proud of that most people don\u2019t know about?",
+  "What kind of person do you find it easiest to talk to?",
+  "What\u2019s something you do differently than most people you know?",
+  "What would you want a pen pal to know about you before your first letter?",
 ];
+
+const REPLY_STYLE_PROMPT_INDEX: Record<ReplyStyle, number> = {
+  quick: 0,
+  thoughtful: 1,
+  deep: 2,
+};
 
 const PAL_INFO: Record<string, { city: string; localTime: string }> = {
   "1": { city: "Ljubljana", localTime: "3:31 PM" },
@@ -75,12 +91,56 @@ export default function ChatScreen() {
   const palInfo = PAL_INFO[id ?? ""] ?? { city: "Somewhere", localTime: "noon" };
 
   const [messages, setMessages] = useState<Message[]>(
-    id === "1" ? MIRA_MESSAGES : GENERIC_MESSAGES
+    id === "1" ? MIRA_MESSAGES : []
   );
   const [draft, setDraft] = useState("");
   const [aiModalVisible, setAiModalVisible] = useState(false);
   const [showPasteToast, setShowPasteToast] = useState(false);
   const toastOpacity = useRef(new Animated.Value(0)).current;
+
+  // ── Opener / nudges state ───────────────────────────────────────────────
+  const pal = SAMPLE_PALS.find((p) => p.id === id);
+  const palReplyStyle: ReplyStyle = pal?.replyStyle ?? "thoughtful";
+  const [openerDismissed, setOpenerDismissed] = useState(false);
+  const [promptIndex, setPromptIndex] = useState<number>(
+    REPLY_STYLE_PROMPT_INDEX[palReplyStyle]
+  );
+  const [dismissedNudges, setDismissedNudges] = useState<number[]>([]);
+  const composeInputRef = useRef<RNTextInput>(null);
+
+  const isNewConversation = messages.length === 0 && !openerDismissed;
+  const currentPrompt = OPENER_PROMPTS[promptIndex];
+
+  const myMessageCount = messages.filter((m) => m.who === "me").length;
+  const activeNudge: 1 | 2 | null = (() => {
+    if (myMessageCount === 1 && !dismissedNudges.includes(1)) return 1;
+    if (myMessageCount === 2 && !dismissedNudges.includes(2)) return 2;
+    return null;
+  })();
+
+  const handleShufflePrompt = () => {
+    setPromptIndex((i) => (i + 1) % OPENER_PROMPTS.length);
+  };
+
+  const handleUsePrompt = () => {
+    setDraft(currentPrompt);
+    setOpenerDismissed(true);
+    setTimeout(() => {
+      composeInputRef.current?.focus();
+      scrollRef.current?.scrollToEnd({ animated: true });
+    }, 50);
+  };
+
+  const handleWriteOwn = () => {
+    setOpenerDismissed(true);
+    setTimeout(() => composeInputRef.current?.focus(), 50);
+  };
+
+  const dismissNudge = (which: 1 | 2) => {
+    setDismissedNudges((prev) =>
+      prev.includes(which) ? prev : [...prev, which]
+    );
+  };
 
   // Auto-scroll on new messages
   useEffect(() => {
@@ -124,64 +184,86 @@ export default function ChatScreen() {
         behavior={Platform.OS === "ios" ? "padding" : "height"}
         keyboardVerticalOffset={0}
       >
-        {/* Messages */}
-        <ScrollView
-          ref={scrollRef}
-          contentContainerStyle={[
-            styles.messageList,
-            { paddingTop: headerTop + HEADER_HEIGHT + spacing[5] },
-          ]}
-          keyboardShouldPersistTaps="handled"
-          showsVerticalScrollIndicator={false}
-        >
-          {/* Encryption notice */}
-          <View style={styles.encryptionPill}>
-            <Feather name="lock" size={11} color={semantic.inkSoft} />
-            <Text style={styles.encryptionText}>
-              END-TO-END ENCRYPTED &middot; THOUGHTFUL REPLIES
-            </Text>
-          </View>
+        {isNewConversation ? (
+          <OpenerPanel
+            palName={palName}
+            palHue={palHue}
+            prompt={currentPrompt}
+            onShuffle={handleShufflePrompt}
+            onUsePrompt={handleUsePrompt}
+            onWriteOwn={handleWriteOwn}
+            headerTop={headerTop}
+          />
+        ) : (
+          <ScrollView
+            ref={scrollRef}
+            contentContainerStyle={[
+              styles.messageList,
+              { paddingTop: headerTop + HEADER_HEIGHT + spacing[5] },
+            ]}
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
+          >
+            {/* Encryption notice */}
+            <View style={styles.encryptionPill}>
+              <Feather name="lock" size={11} color={semantic.inkSoft} />
+              <Text style={styles.encryptionText}>
+                END-TO-END ENCRYPTED &middot; THOUGHTFUL REPLIES
+              </Text>
+            </View>
 
-          {/* Messages */}
-          {messages.map((msg) => (
-            <MessageBubble
-              key={msg.id}
-              message={msg}
-              onFlagPress={() => setAiModalVisible(true)}
-            />
-          ))}
-        </ScrollView>
+            {/* Messages */}
+            {messages.map((msg) => (
+              <MessageBubble
+                key={msg.id}
+                message={msg}
+                onFlagPress={() => setAiModalVisible(true)}
+              />
+            ))}
+          </ScrollView>
+        )}
+
+        {/* Quality nudge */}
+        {!isNewConversation && activeNudge !== null && (
+          <NudgeBar
+            kind={activeNudge}
+            onDismiss={() => dismissNudge(activeNudge)}
+          />
+        )}
 
         {/* Compose bar */}
-        <View style={[styles.composeBar, { paddingBottom: composeBottomPad }]}>
-          <View style={styles.composeInner}>
-            <RNTextInput
-              style={styles.composeInput}
-              value={draft}
-              onChangeText={setDraft}
-              placeholder="Write something real\u2026"
-              placeholderTextColor={semantic.inkSoft}
-              multiline
-              maxLength={5000}
-            />
-            <Pressable
-              style={[
-                styles.sendBtn,
-                draft.trim()
-                  ? styles.sendBtnActive
-                  : styles.sendBtnInactive,
-              ]}
-              disabled={!draft.trim()}
-              onPress={handleSend}
-            >
-              <Feather
-                name="send"
-                size={18}
-                color={draft.trim() ? semantic.accentFg : semantic.inkSoft}
+        {!isNewConversation && (
+          <View style={[styles.composeBar, { paddingBottom: composeBottomPad }]}>
+            <View style={styles.composeInner}>
+              <RNTextInput
+                ref={composeInputRef}
+                style={styles.composeInput}
+                value={draft}
+                onChangeText={setDraft}
+                placeholder="Write something real\u2026"
+                placeholderTextColor={semantic.inkSoft}
+                multiline
+                maxLength={5000}
               />
-            </Pressable>
+              <Pressable
+                style={[
+                  styles.sendBtn,
+                  draft.trim()
+                    ? styles.sendBtnActive
+                    : styles.sendBtnInactive,
+                ]}
+                disabled={!draft.trim()}
+                onPress={handleSend}
+              >
+                <Feather
+                  name="send"
+                  size={18}
+                  color={draft.trim() ? semantic.accentFg : semantic.inkSoft}
+                />
+              </Pressable>
+            </View>
           </View>
-        </View>
+        )}
       </KeyboardAvoidingView>
 
       {/* ── Header (absolute, blur) ──────────────────────────────────── */}
@@ -240,6 +322,87 @@ export default function ChatScreen() {
         visible={aiModalVisible}
         onClose={() => setAiModalVisible(false)}
       />
+    </View>
+  );
+}
+
+// ─── Opener Panel ───────────────────────────────────────────────────────────
+
+function OpenerPanel({
+  palName,
+  palHue,
+  prompt,
+  onShuffle,
+  onUsePrompt,
+  onWriteOwn,
+  headerTop,
+}: {
+  palName: string;
+  palHue: number | undefined;
+  prompt: string;
+  onShuffle: () => void;
+  onUsePrompt: () => void;
+  onWriteOwn: () => void;
+  headerTop: number;
+}) {
+  return (
+    <View
+      style={[
+        styles.openerWrap,
+        { paddingTop: headerTop + HEADER_HEIGHT + spacing[4] },
+      ]}
+    >
+      <View style={styles.openerTop}>
+        <Avatar name={palName} size="md" hue={palHue} />
+        <Text style={styles.openerPalName}>{palName}</Text>
+        <Text style={styles.openerCaption}>Start your first letter</Text>
+      </View>
+
+      <View style={styles.promptCard}>
+        <Text style={styles.promptLabel}>A GOOD PLACE TO START</Text>
+        <Text style={styles.promptText}>{prompt}</Text>
+        <Pressable style={styles.shuffleBtn} onPress={onShuffle}>
+          <Feather name="refresh-cw" size={13} color={semantic.accent} />
+          <Text style={styles.shuffleText}>Try another prompt</Text>
+        </Pressable>
+      </View>
+
+      <View style={styles.usePromptWrap}>
+        <Button full onPress={onUsePrompt}>
+          Use this prompt →
+        </Button>
+      </View>
+
+      <Pressable onPress={onWriteOwn} style={styles.writeOwnBtn}>
+        <Text style={styles.writeOwnText}>Write your own instead</Text>
+      </Pressable>
+    </View>
+  );
+}
+
+// ─── Nudge Bar ──────────────────────────────────────────────────────────────
+
+function NudgeBar({
+  kind,
+  onDismiss,
+}: {
+  kind: 1 | 2;
+  onDismiss: () => void;
+}) {
+  const icon: React.ComponentProps<typeof Feather>["name"] =
+    kind === 1 ? "zap" : "message-circle";
+  const text =
+    kind === 1
+      ? "Good start. Try ending with a question — it keeps the conversation alive."
+      : "You’re doing great. The best pen pals share one small personal detail per letter.";
+
+  return (
+    <View style={styles.nudgeBar}>
+      <Feather name={icon} size={14} color={semantic.accentInk} />
+      <Text style={styles.nudgeText}>{text}</Text>
+      <Pressable onPress={onDismiss} hitSlop={8} style={styles.nudgeDismiss}>
+        <Feather name="x" size={12} color={semantic.inkSoft} />
+      </Pressable>
     </View>
   );
 }
@@ -488,6 +651,110 @@ const styles = StyleSheet.create({
     backgroundColor: semantic.surface2,
     borderWidth: 1,
     borderColor: semantic.rule,
+  },
+
+  // Opener panel
+  openerWrap: {
+    flex: 1,
+    justifyContent: "center",
+    paddingHorizontal: spacing[6],
+    paddingBottom: spacing[6],
+  },
+  openerTop: {
+    alignItems: "center",
+  },
+  openerPalName: {
+    fontFamily: typography.fontDisplay,
+    fontSize: 18,
+    color: semantic.ink,
+    marginTop: spacing[2],
+  },
+  openerCaption: {
+    fontFamily: typography.fontBody,
+    fontSize: 13,
+    color: semantic.inkMuted,
+    marginTop: spacing[1],
+  },
+  promptCard: {
+    backgroundColor: semantic.surface,
+    borderRadius: 20,
+    padding: 20,
+    marginTop: spacing[6],
+    ...Platform.select({
+      ios: {
+        shadowColor: colors.paper[9],
+        shadowOffset: { width: 0, height: 6 },
+        shadowOpacity: 0.08,
+        shadowRadius: 16,
+      },
+      android: {
+        elevation: 4,
+      },
+    }),
+  },
+  promptLabel: {
+    fontFamily: MONO_FONT,
+    fontSize: 11,
+    fontWeight: "500",
+    color: semantic.inkSoft,
+    textTransform: "uppercase",
+    letterSpacing: 1.2,
+  },
+  promptText: {
+    fontFamily: typography.fontDisplay,
+    fontSize: 17,
+    color: semantic.ink,
+    lineHeight: 17 * 1.6,
+    marginTop: spacing[2],
+  },
+  shuffleBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    alignSelf: "flex-start",
+    marginTop: spacing[3],
+    paddingVertical: spacing[1],
+  },
+  shuffleText: {
+    fontFamily: typography.fontBody,
+    fontSize: typography.scale.sm,
+    color: semantic.accent,
+    fontWeight: "500",
+  },
+  usePromptWrap: {
+    marginTop: spacing[4],
+  },
+  writeOwnBtn: {
+    alignSelf: "center",
+    marginTop: spacing[3],
+    paddingVertical: spacing[1],
+  },
+  writeOwnText: {
+    fontFamily: typography.fontBody,
+    fontSize: 13,
+    color: semantic.accentInk,
+  },
+
+  // Nudge bar
+  nudgeBar: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    backgroundColor: semantic.surface2,
+    borderTopWidth: 1,
+    borderTopColor: semantic.ruleSoft,
+    paddingHorizontal: spacing[5],
+    paddingVertical: 10,
+  },
+  nudgeText: {
+    flex: 1,
+    fontFamily: typography.fontBody,
+    fontSize: 13,
+    color: semantic.inkMuted,
+    lineHeight: 13 * 1.4,
+  },
+  nudgeDismiss: {
+    padding: 2,
   },
 
   // Paste toast
