@@ -83,6 +83,7 @@ export default function RootLayout() {
       <Stack screenOptions={{ headerShown: false }}>
         <Stack.Screen name="notification-preferences" />
         <Stack.Screen name="past-matches" />
+        <Stack.Screen name="invite" />
       </Stack>
     </SafeAreaProvider>
   );

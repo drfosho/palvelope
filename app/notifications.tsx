@@ -10,8 +10,7 @@ import {
 import { useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Feather } from "@expo/vector-icons";
-import { Avatar, BrandMark, Button } from "@/components/ui";
-import AIFlagModal from "@/components/AIFlagModal";
+import { Avatar, BrandMark } from "@/components/ui";
 import { semantic, typography, spacing } from "@/theme/tokens";
 import SAMPLE_PALS from "@/data/samplePals";
 
@@ -19,7 +18,7 @@ import SAMPLE_PALS from "@/data/samplePals";
 
 interface Notification {
   id: string;
-  type: "new_letter" | "new_match" | "ai_flag";
+  type: "new_letter" | "new_match";
   name: string;
   hue: number;
   text: string;
@@ -34,7 +33,7 @@ const INITIAL_NOTIFICATIONS: Notification[] = [
   { id: "2", type: "new_match", name: "Yuki T.", hue: 90, text: "was matched with you. Say hello?", time: "2h ago", read: false },
   { id: "3", type: "new_letter", name: "Lena B.", hue: 340, text: "replied to your letter.", time: "Yesterday", read: true },
   { id: "4", type: "new_match", name: "Rafi", hue: 180, text: "was matched with you. Say hello?", time: "2d ago", read: true },
-  { id: "5", type: "ai_flag", name: "S\u00F8ren", hue: 260, text: "A message in your conversation was flagged as possibly AI-assisted.", time: "3d ago", read: true },
+  { id: "5", type: "new_match", name: "S\u00F8ren", hue: 260, text: "was matched with you. Say hello?", time: "3d ago", read: true },
 ];
 
 // Map notification names to pal IDs for navigation
@@ -51,7 +50,6 @@ const LETTER_PAL_IDS: Record<string, string> = {
 export default function Notifications() {
   const router = useRouter();
   const [notifications, setNotifications] = useState(INITIAL_NOTIFICATIONS);
-  const [aiModalVisible, setAiModalVisible] = useState(false);
 
   const markRead = (id: string) => {
     setNotifications((prev) =>
@@ -82,9 +80,6 @@ export default function Notifications() {
         });
         break;
       }
-      case "ai_flag":
-        setAiModalVisible(true);
-        break;
     }
   };
 
@@ -103,32 +98,30 @@ export default function Notifications() {
         </Pressable>
       </View>
 
-      {hasNotifications ? (
-        <ScrollView
-          contentContainerStyle={styles.list}
-          showsVerticalScrollIndicator={false}
-        >
-          {notifications.map((notif, i) => (
-            <NotificationRow
-              key={notif.id}
-              notif={notif}
-              isLast={i === notifications.length - 1}
-              onPress={() => handlePress(notif)}
-            />
-          ))}
-        </ScrollView>
-      ) : (
-        <View style={styles.empty}>
-          <BrandMark size={28} />
-          <Text style={styles.emptyTitle}>All caught up</Text>
-          <Text style={styles.emptySub}>No new notifications</Text>
-        </View>
-      )}
-
-      <AIFlagModal
-        visible={aiModalVisible}
-        onClose={() => setAiModalVisible(false)}
-      />
+      <ScrollView
+        style={styles.bodyScroll}
+        contentContainerStyle={styles.bodyContent}
+        showsVerticalScrollIndicator={false}
+      >
+        {hasNotifications ? (
+          <View>
+            {notifications.map((notif, i) => (
+              <NotificationRow
+                key={notif.id}
+                notif={notif}
+                isLast={i === notifications.length - 1}
+                onPress={() => handlePress(notif)}
+              />
+            ))}
+          </View>
+        ) : (
+          <View style={styles.emptyCentered}>
+            <BrandMark size={28} />
+            <Text style={styles.emptyTitle}>All caught up.</Text>
+            <Text style={styles.emptySub}>Nothing new right now.</Text>
+          </View>
+        )}
+      </ScrollView>
     </SafeAreaView>
   );
 }
@@ -149,21 +142,13 @@ function NotificationRow({
       style={[styles.row, !notif.read && styles.rowUnread]}
       onPress={onPress}
     >
-      {/* Icon / avatar */}
-      {notif.type === "ai_flag" ? (
-        <View style={styles.flagIcon}>
-          <Feather name="alert-triangle" size={14} color={semantic.accentInk} />
-        </View>
-      ) : (
-        <Avatar name={notif.name} size="sm" hue={notif.hue} />
-      )}
+      {/* Avatar */}
+      <Avatar name={notif.name} size="sm" hue={notif.hue} />
 
       {/* Text */}
       <View style={styles.rowContent}>
         <Text style={styles.rowText}>
-          <Text style={styles.rowName}>
-            {notif.type === "ai_flag" ? "Palvelope" : notif.name}
-          </Text>{" "}
+          <Text style={styles.rowName}>{notif.name}</Text>{" "}
           <Text style={styles.rowBody}>{notif.text}</Text>
         </Text>
         <Text style={styles.rowTime}>{notif.time}</Text>
@@ -213,8 +198,20 @@ const styles = StyleSheet.create({
     fontSize: typography.scale.sm,
     color: semantic.accentInk,
   },
-  list: {
+  bodyScroll: {
+    flex: 1,
+  },
+  bodyContent: {
+    flexGrow: 1,
+    justifyContent: "flex-start",
     paddingBottom: spacing[8],
+  },
+  emptyCentered: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    paddingHorizontal: 24,
+    gap: spacing[2],
   },
 
   // Row
@@ -227,14 +224,6 @@ const styles = StyleSheet.create({
   },
   rowUnread: {
     backgroundColor: semantic.surface2,
-  },
-  flagIcon: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: semantic.accentSoft,
-    alignItems: "center",
-    justifyContent: "center",
   },
   rowContent: {
     flex: 1,
@@ -273,21 +262,19 @@ const styles = StyleSheet.create({
     backgroundColor: semantic.ruleSoft,
   },
 
-  // Empty
-  empty: {
-    flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
-    gap: spacing[3],
-  },
+  // Empty inner stack — centering handled by emptyCentered wrapper
   emptyTitle: {
     fontFamily: typography.fontDisplay,
-    fontSize: typography.scale.lg,
+    fontSize: 22,
     color: semantic.ink,
+    marginTop: spacing[3],
+    textAlign: "center",
   },
   emptySub: {
     fontFamily: typography.fontBody,
     fontSize: 14,
     color: semantic.inkMuted,
+    marginTop: 8,
+    textAlign: "center",
   },
 });

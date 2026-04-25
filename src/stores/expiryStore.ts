@@ -8,6 +8,6 @@ interface ExpiryStore {
 }
 
 export const useExpiryStore = create<ExpiryStore>((set) => ({
-  defaultExpiry: 14,
+  defaultExpiry: null,
   setDefaultExpiry: (days) => set({ defaultExpiry: days }),
 }));

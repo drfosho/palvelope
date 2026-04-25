@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -9,6 +9,7 @@ import {
   Platform,
   ActivityIndicator,
   TextInput,
+  Animated,
 } from "react-native";
 import { useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -53,10 +54,36 @@ interface AccountRow {
 
 const ACCOUNT_ROWS: AccountRow[] = [
   { icon: "mail", label: "Email & notifications", route: "/notification-preferences" },
+  // TRUSTED CIRCLE — hidden at launch, re-enable when positioning is right
+  // { icon: "gift", label: "Invite someone you trust", route: "/invite" },
   { icon: "lock", label: "Privacy settings" },
   { icon: "shield", label: "Safety & blocking" },
   { icon: "help-circle", label: "Help & feedback" },
 ];
+
+// ─── Profile completeness ──────────────────────────────────────────────────
+
+function getCompleteness(profile: Profile | null): {
+  score: number;
+  missing: string[];
+} {
+  if (!profile) return { score: 0, missing: [] };
+  const checks = [
+    { label: "Add your name", done: !!profile.display_name },
+    { label: "Write a bio", done: !!profile.bio },
+    {
+      label: "Pick interests",
+      done: !!profile.interests && profile.interests.length >= 2,
+    },
+    { label: "Set your region", done: !!profile.home_region },
+    { label: "Choose writing pace", done: !!profile.reply_style },
+  ];
+  const done = checks.filter((c) => c.done).length;
+  return {
+    score: Math.round((done / checks.length) * 100),
+    missing: checks.filter((c) => !c.done).map((c) => c.label),
+  };
+}
 
 // ─── Component ──────────────────────────────────────────────────────────────
 
@@ -96,10 +123,41 @@ export default function ProfileScreen() {
   const homeRegion = profile?.home_region;
   const bio = profile?.bio;
 
-  const handleSignOut = async () => {
-    await supabase.auth.signOut();
-    // _layout.tsx auth listener will redirect to welcome
+  const handleSignOut = () => {
+    Alert.alert(
+      "Sign out?",
+      "You’ll need to sign in again to access your letters.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Sign out",
+          style: "destructive",
+          onPress: async () => {
+            await supabase.auth.signOut();
+            router.replace("/(auth)/welcome");
+          },
+        },
+      ]
+    );
   };
+
+  // ── Completeness ─────────────────────────────────────────────────────────
+  const { score: completenessScore, missing: completenessMissing } =
+    getCompleteness(profile);
+  const progressAnim = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    Animated.timing(progressAnim, {
+      toValue: completenessScore,
+      duration: 500,
+      useNativeDriver: false,
+    }).start();
+  }, [completenessScore, progressAnim]);
+
+  const progressWidth = progressAnim.interpolate({
+    inputRange: [0, 100],
+    outputRange: ["0%", "100%"],
+  });
 
   const enterEdit = () => {
     setEditingName(profile?.display_name ?? "");
@@ -304,6 +362,36 @@ export default function ProfileScreen() {
                 </Button>
               )}
             </View>
+          </View>
+        )}
+
+        {/* Completeness */}
+        {completenessScore < 100 && (
+          <View style={styles.completenessCard}>
+            <View style={styles.completenessHeader}>
+              <Text style={styles.completenessLabel}>Profile strength</Text>
+              <Text style={styles.completenessScore}>
+                {completenessScore}%
+              </Text>
+            </View>
+            <View style={styles.progressTrack}>
+              <Animated.View
+                style={[styles.progressFill, { width: progressWidth }]}
+              />
+            </View>
+            {completenessMissing.length > 0 && (
+              <View style={styles.missingRow}>
+                <Text style={styles.missingLabel}>Missing:</Text>
+                <Pressable
+                  onPress={() => setIsEditing(true)}
+                  style={styles.missingChip}
+                >
+                  <Text style={styles.missingChipText}>
+                    {completenessMissing[0]}
+                  </Text>
+                </Pressable>
+              </View>
+            )}
           </View>
         )}
 
@@ -558,6 +646,67 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     backgroundColor: semantic.accent,
+  },
+  completenessCard: {
+    backgroundColor: semantic.surface,
+    borderRadius: 16,
+    padding: 16,
+    marginHorizontal: 20,
+    marginTop: 12,
+    borderWidth: 1,
+    borderColor: semantic.rule,
+  },
+  completenessHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+  },
+  completenessLabel: {
+    fontFamily: typography.fontBody,
+    fontSize: 13,
+    fontWeight: "500",
+    color: semantic.ink,
+  },
+  completenessScore: {
+    fontFamily: typography.fontBody,
+    fontSize: 13,
+    fontWeight: "600",
+    color: semantic.accentInk,
+  },
+  progressTrack: {
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: semantic.surface2,
+    overflow: "hidden",
+    marginTop: 8,
+  },
+  progressFill: {
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: semantic.accentInk,
+  },
+  missingRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginTop: 8,
+  },
+  missingLabel: {
+    fontFamily: typography.fontBody,
+    fontSize: 12,
+    color: semantic.inkSoft,
+  },
+  missingChip: {
+    backgroundColor: semantic.accentSoft,
+    borderRadius: 99,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+  },
+  missingChipText: {
+    fontFamily: typography.fontBody,
+    fontSize: 12,
+    color: semantic.accentInk,
+    fontWeight: "500",
   },
   statsRow: {
     flexDirection: "row",

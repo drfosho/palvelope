@@ -118,6 +118,8 @@ export type Profile = {
 };
 // -- Add column: alter table profiles add column if not exists intents text[] default '{}';
 
+export type ConversationMode = "live" | "thoughtful" | "letterlike";
+
 export type Conversation = {
   id: string;
   participant_1: string;
@@ -132,6 +134,23 @@ export type Conversation = {
   expiry_days?: number | null;
   archived_at?: string | null;
   archived_by?: string | null;
+  // Added in 010_memories.sql
+  mode?: ConversationMode | null;
+  mode_proposed?: ConversationMode | null;
+  mode_proposed_by?: string | null;
+  mode_proposal_created_at?: string | null;
+  last_prompt_sent_at?: string | null;
+  message_count?: number | null;
+};
+
+export type Moment = {
+  id: string;
+  conversation_id: string;
+  saved_by: string;
+  message_id: string | null;
+  content: string;
+  note: string | null;
+  created_at: string;
 };
 
 export type Message = {
@@ -141,6 +160,7 @@ export type Message = {
   content: string;
   created_at: string;
   read_at: string | null;
+  // Reserved for future use — not surfaced in UI
   ai_flagged: boolean;
   ai_flag_reason: string | null;
 };
@@ -232,7 +252,7 @@ export async function getConversations(userId: string) {
 export async function getOrCreateConversation(
   userId: string,
   palId: string,
-  expiryDays: number | null = 14
+  expiryDays: number | null = null
 ): Promise<string | null> {
   // Check if conversation already exists (either direction)
   const { data: existing } = await supabase
@@ -292,6 +312,84 @@ export async function sendMessage(
     .select()
     .single();
   return { data, error };
+}
+
+// ─── Moment helpers ─────────────────────────────────────────────────────────
+
+export async function saveMoment(
+  conversationId: string,
+  savedBy: string,
+  messageId: string,
+  content: string,
+  note?: string
+) {
+  const { error } = await supabase.from("moments").insert({
+    conversation_id: conversationId,
+    saved_by: savedBy,
+    message_id: messageId,
+    content,
+    note: note || null,
+  });
+  return { error };
+}
+
+export async function getMoments(conversationId: string): Promise<Moment[]> {
+  const { data } = await supabase
+    .from("moments")
+    .select("*")
+    .eq("conversation_id", conversationId)
+    .order("created_at", { ascending: false });
+  return (data ?? []) as Moment[];
+}
+
+export async function deleteMoment(momentId: string) {
+  const { error } = await supabase
+    .from("moments")
+    .delete()
+    .eq("id", momentId);
+  return { error };
+}
+
+// ─── Conversation mode helpers ──────────────────────────────────────────────
+
+export async function proposeMode(
+  conversationId: string,
+  proposedBy: string,
+  mode: ConversationMode
+) {
+  const { error } = await supabase
+    .from("conversations")
+    .update({
+      mode_proposed: mode,
+      mode_proposed_by: proposedBy,
+      mode_proposal_created_at: new Date().toISOString(),
+    })
+    .eq("id", conversationId);
+  return { error };
+}
+
+export async function resolveMode(
+  conversationId: string,
+  accept: boolean,
+  proposedMode: ConversationMode
+) {
+  const update = accept
+    ? {
+        mode: proposedMode,
+        mode_proposed: null,
+        mode_proposed_by: null,
+        mode_proposal_created_at: null,
+      }
+    : {
+        mode_proposed: null,
+        mode_proposed_by: null,
+        mode_proposal_created_at: null,
+      };
+  const { error } = await supabase
+    .from("conversations")
+    .update(update)
+    .eq("id", conversationId);
+  return { error };
 }
 
 // ─── Match helpers ──────────────────────────────────────────────────────────

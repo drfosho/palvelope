@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -7,8 +7,9 @@ import {
   Pressable,
   ActivityIndicator,
   Alert,
+  Platform,
 } from "react-native";
-import { useRouter } from "expo-router";
+import { useFocusEffect, useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Feather } from "@expo/vector-icons";
 import { Avatar, BrandMark, Button, Chip } from "@/components/ui";
@@ -29,6 +30,16 @@ interface DisplayThread {
   draft: boolean;
   status: "active" | "archived" | "expired" | null;
 }
+
+// TRUSTED CIRCLE — hidden at launch, re-enable when positioning is right
+// interface TrustedRow {
+//   id: string;
+//   palId: string;
+//   name: string;
+//   hue: number;
+//   region: string;
+// }
+// const TRUSTED_BG = "#F8F4ED"; // ≈ oklch(0.97 0.008 80) — warm trusted tint
 
 // ─── Sample fallback (only shown if getConversations throws) ────────────────
 
@@ -98,52 +109,93 @@ export default function Letters() {
   const router = useRouter();
   const [activeFilter, setActiveFilter] = useState("All");
   const [conversations, setConversations] = useState<any[]>([]);
+  // TRUSTED CIRCLE — hidden at launch, re-enable when positioning is right
+  // const [trustedRows, setTrustedRows] = useState<TrustedRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [usingSampleData, setUsingSampleData] = useState(false);
 
+  const mountedRef = useRef(true);
   useEffect(() => {
-    let cancelled = false;
-    let channel: ReturnType<typeof supabase.channel> | null = null;
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
-    const load = async () => {
-      try {
-        const {
-          data: { session },
-        } = await supabase.auth.getSession();
-        if (!session) {
-          if (cancelled) return;
-          setUsingSampleData(true);
-          setLoading(false);
-          return;
-        }
-        if (cancelled) return;
-        setCurrentUserId(session.user.id);
-
-        const convos = await getConversations(session.user.id);
-        console.log(
-          "[Letters] conversations:",
-          JSON.stringify(convos, null, 2)
-        );
-        if (cancelled) return;
-        setConversations(convos);
-        setUsingSampleData(false);
-        setLoading(false);
-      } catch (e) {
-        console.error("[letters] getConversations failed:", e);
-        if (cancelled) return;
+  const load = useCallback(async () => {
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      if (!mountedRef.current) return;
+      if (!session) {
         setUsingSampleData(true);
         setLoading(false);
+        return;
       }
-    };
+      setCurrentUserId(session.user.id);
 
+      const convos = await getConversations(session.user.id);
+      if (!mountedRef.current) return;
+      console.log(
+        "[Letters] conversations:",
+        JSON.stringify(convos, null, 2)
+      );
+      setConversations(convos);
+      setUsingSampleData(false);
+
+      // TRUSTED CIRCLE — hidden at launch, re-enable when positioning is right
+      // const { data: tcs } = await supabase
+      //   .from("trusted_connections")
+      //   .select("user_1, user_2")
+      //   .or(`user_1.eq.${session.user.id},user_2.eq.${session.user.id}`);
+      // if (!mountedRef.current) return;
+      // if (tcs && tcs.length > 0) {
+      //   const others = tcs.map((tc: any) =>
+      //     tc.user_1 === session.user.id ? tc.user_2 : tc.user_1
+      //   );
+      //   const { data: profiles } = await supabase
+      //     .from("profiles")
+      //     .select("id, display_name, home_region")
+      //     .in("id", others);
+      //   if (!mountedRef.current) return;
+      //   const rows: TrustedRow[] = (profiles ?? []).map((p: any) => ({
+      //     id: p.id,
+      //     palId: p.id,
+      //     name: p.display_name ?? "Anonymous",
+      //     hue: hueFromId(p.id),
+      //     region: p.home_region ?? "",
+      //   }));
+      //   setTrustedRows(rows);
+      // } else {
+      //   setTrustedRows([]);
+      // }
+
+      setLoading(false);
+    } catch (e) {
+      console.error("[letters] getConversations failed:", e);
+      if (!mountedRef.current) return;
+      setUsingSampleData(true);
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
     load();
 
-    channel = supabase
+    const channel = supabase
       .channel("conversations-list")
       .on(
         "postgres_changes" as any,
-        { event: "UPDATE", schema: "public", table: "conversations" },
+        { event: "*", schema: "public", table: "conversations" },
+        () => {
+          load();
+        }
+      )
+      .on(
+        "postgres_changes" as any,
+        { event: "INSERT", schema: "public", table: "messages" },
         () => {
           load();
         }
@@ -151,10 +203,17 @@ export default function Letters() {
       .subscribe();
 
     return () => {
-      cancelled = true;
-      if (channel) supabase.removeChannel(channel);
+      supabase.removeChannel(channel);
     };
-  }, []);
+  }, [load]);
+
+  // Reload when the tab comes back into focus (e.g., after sending a message
+  // in chat and navigating back).
+  useFocusEffect(
+    useCallback(() => {
+      load();
+    }, [load])
+  );
 
   const allThreads: DisplayThread[] = usingSampleData
     ? SAMPLE_THREADS
@@ -209,6 +268,7 @@ export default function Letters() {
       <ScrollView
         horizontal
         showsHorizontalScrollIndicator={false}
+        style={styles.filterScroll}
         contentContainerStyle={styles.filterRow}
       >
         {FILTERS.map((f) => (
@@ -226,31 +286,50 @@ export default function Letters() {
         <View style={styles.loadingWrap}>
           <ActivityIndicator color={semantic.accent} />
         </View>
-      ) : hasThreads ? (
+      ) : (
         <ScrollView
-          contentContainerStyle={styles.list}
+          style={{ flex: 1 }}
+          contentContainerStyle={{
+            flexGrow: 1,
+            justifyContent: "flex-start",
+            paddingBottom: 100,
+          }}
           showsVerticalScrollIndicator={false}
         >
-          {threads.map((thread, i) => (
-            <ThreadRow
-              key={thread.id}
-              thread={thread}
-              isLast={i === threads.length - 1}
-              onPress={() =>
-                router.push({
-                  pathname: "/chat/[id]",
-                  params: {
-                    id: thread.palId,
-                    name: thread.name,
-                    hue: String(thread.hue),
-                  },
-                })
-              }
-            />
-          ))}
+          {!hasThreads ? (
+            <View style={styles.emptyCentered}>
+              <EmptyState
+                onDiscover={() => router.push("/(tabs)/discover")}
+              />
+            </View>
+          ) : (
+            <>
+              {/*
+                TRUSTED CIRCLE — hidden at launch, re-enable when positioning
+                is right. Original block fetched trustedRows and rendered
+                <TrustedConnectionRow /> entries with a "TRUSTED CIRCLE"
+                section label above the regular thread list.
+              */}
+              {threads.map((thread, i) => (
+                <ThreadRow
+                  key={thread.id}
+                  thread={thread}
+                  isLast={i === threads.length - 1}
+                  onPress={() =>
+                    router.push({
+                      pathname: "/chat/[id]",
+                      params: {
+                        id: thread.palId,
+                        name: thread.name,
+                        hue: String(thread.hue),
+                      },
+                    })
+                  }
+                />
+              ))}
+            </>
+          )}
         </ScrollView>
-      ) : (
-        <EmptyState onDiscover={() => router.push("/(tabs)/discover")} />
       )}
     </SafeAreaView>
   );
@@ -322,15 +401,53 @@ function ThreadRow({
   );
 }
 
+// ─── Trusted Connection Row ────────────────────────────────────────────────
+// TRUSTED CIRCLE — hidden at launch, re-enable when positioning is right
+// function TrustedConnectionRow({
+//   row,
+//   isLast,
+//   onPress,
+// }: {
+//   row: TrustedRow;
+//   isLast: boolean;
+//   onPress: () => void;
+// }) {
+//   return (
+//     <Pressable style={styles.trustedRow} onPress={onPress}>
+//       <Avatar name={row.name} size="md" hue={row.hue} />
+//       <View style={styles.threadContent}>
+//         <View style={styles.threadTopRow}>
+//           <View style={styles.trustedNameRow}>
+//             <Feather name="shield" size={10} color={semantic.accentInk} />
+//             <Text style={styles.threadName} numberOfLines={1}>
+//               {row.name}
+//             </Text>
+//           </View>
+//         </View>
+//         <Text style={styles.threadPreview} numberOfLines={1}>
+//           {row.region
+//             ? `${row.region} · Tap to write your first letter`
+//             : "Tap to write your first letter"}
+//         </Text>
+//       </View>
+//       {!isLast && <View style={styles.separator} />}
+//     </Pressable>
+//   );
+// }
+
 // ─── Empty State ────────────────────────────────────────────────────────────
 
 function EmptyState({ onDiscover }: { onDiscover: () => void }) {
   return (
     <View style={styles.empty}>
       <BrandMark size={28} />
-      <Text style={styles.emptyTitle}>No letters yet</Text>
-      <Text style={styles.emptySubtitle}>Find someone to write to</Text>
-      <Button onPress={onDiscover}>Discover people</Button>
+      <Text style={styles.emptyTitle}>Your desk is quiet.</Text>
+      <Text style={styles.emptySubtitle}>
+        When you write to someone, your letters will live here.
+      </Text>
+      <View style={styles.emptyBtn}>
+        <Button onPress={onDiscover}>Find someone to write to</Button>
+      </View>
     </View>
   );
 }
@@ -378,6 +495,9 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
+  filterScroll: {
+    flexGrow: 0, // don't let the horizontal chip row claim vertical space
+  },
   filterRow: {
     paddingLeft: spacing[5],
     paddingRight: spacing[2],
@@ -385,14 +505,22 @@ const styles = StyleSheet.create({
     paddingBottom: spacing[2],
     gap: spacing[2],
   },
-  list: {
-    paddingBottom: spacing[8],
+  emptyCentered: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    paddingBottom: 80,
+    paddingHorizontal: 24,
   },
   loadingWrap: {
     flex: 1,
     alignItems: "center",
     justifyContent: "center",
   },
+
+  // TRUSTED CIRCLE — hidden at launch, re-enable when positioning is right
+  // trustedSectionLabel, trustedRow, trustedNameRow styles intentionally
+  // omitted; their references are commented out above.
 
   // Thread row
   threadRow: {
@@ -460,21 +588,29 @@ const styles = StyleSheet.create({
     backgroundColor: semantic.ruleSoft,
   },
 
-  // Empty
+  // Empty — centered by parent `emptyCentered` wrapper, this just stacks
+  // BrandMark + text + button vertically with consistent gaps.
   empty: {
-    flex: 1,
-    justifyContent: "center",
     alignItems: "center",
-    gap: spacing[3],
+    gap: spacing[2],
   },
   emptyTitle: {
     fontFamily: typography.fontDisplay,
-    fontSize: typography.scale.lg,
+    fontSize: 22,
     color: semantic.ink,
+    marginTop: spacing[3],
+    textAlign: "center",
   },
   emptySubtitle: {
     fontFamily: typography.fontBody,
     fontSize: 14,
     color: semantic.inkMuted,
+    marginTop: 8,
+    maxWidth: 260,
+    textAlign: "center",
+    lineHeight: 20,
+  },
+  emptyBtn: {
+    marginTop: 20,
   },
 });

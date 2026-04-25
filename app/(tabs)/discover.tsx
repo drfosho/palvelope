@@ -277,58 +277,67 @@ export default function Discover() {
         <View style={styles.loaderWrap}>
           <ActivityIndicator color={semantic.accentInk} />
         </View>
-      ) : matches.length === 0 ? (
-        <EmptyState onRefresh={loadMatches} />
       ) : (
         <ScrollView
-          contentContainerStyle={styles.cardList}
+          style={styles.bodyScroll}
+          contentContainerStyle={styles.bodyContent}
           showsVerticalScrollIndicator={false}
         >
-          {/* Batch header */}
-          <View style={styles.batchHeader}>
-            <Feather name="star" size={14} color={semantic.accentInk} />
-            <Text style={styles.batchHeaderText}>
-              Your {sortedMatches.length} matches for today
-            </Text>
-            <Text style={styles.batchHeaderRight}>Refreshes daily</Text>
-          </View>
-
-          {sortedMatches.map((match) => (
-            <MatchCard
-              key={match.profileId}
-              match={match}
-              opacity={getFadeAnim(match.profileId)}
-              onPass={() => handlePass(match.matchId, match.profileId)}
-              onWrite={() => handleWrite(match)}
-              onOpenProfile={() =>
-                router.push({
-                  pathname: "/pal/[id]",
-                  params: {
-                    id: match.profileId,
-                    name: match.name,
-                    hue: String(match.hue),
-                  },
-                })
-              }
-            />
-          ))}
-
-          {/* Footer */}
-          <View style={styles.footer}>
-            <Text style={styles.footerTitle}>That’s everyone for today.</Text>
-            <Text style={styles.footerSub}>
-              Come back tomorrow for a fresh batch.
-            </Text>
-            <View style={styles.footerBtn}>
-              <Button
-                variant="ghost"
-                size="sm"
-                onPress={() => router.push("/past-matches")}
-              >
-                Browse past matches
-              </Button>
+          {matches.length === 0 ? (
+            <View style={styles.emptyCentered}>
+              <EmptyState onBack={() => router.back()} />
             </View>
-          </View>
+          ) : (
+            <>
+              {/* Batch header */}
+              <View style={styles.batchHeader}>
+                <Feather name="star" size={14} color={semantic.accentInk} />
+                <Text style={styles.batchHeaderText}>
+                  Your {sortedMatches.length} matches for today
+                </Text>
+                <Text style={styles.batchHeaderRight}>Refreshes daily</Text>
+              </View>
+
+              {sortedMatches.map((match) => (
+                <MatchCard
+                  key={match.profileId}
+                  match={match}
+                  opacity={getFadeAnim(match.profileId)}
+                  onPass={() => handlePass(match.matchId, match.profileId)}
+                  onWrite={() => handleWrite(match)}
+                  onOpenProfile={() =>
+                    router.push({
+                      pathname: "/pal/[id]",
+                      params: {
+                        id: match.profileId,
+                        name: match.name,
+                        hue: String(match.hue),
+                      },
+                    })
+                  }
+                />
+              ))}
+
+              {/* Footer */}
+              <View style={styles.footer}>
+                <Text style={styles.footerTitle}>
+                  That’s everyone for today.
+                </Text>
+                <Text style={styles.footerSub}>
+                  Come back tomorrow for a fresh batch.
+                </Text>
+                <View style={styles.footerBtn}>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onPress={() => router.push("/past-matches")}
+                  >
+                    Browse past matches
+                  </Button>
+                </View>
+              </View>
+            </>
+          )}
         </ScrollView>
       )}
     </SafeAreaView>
@@ -337,17 +346,18 @@ export default function Discover() {
 
 // ─── Empty state ────────────────────────────────────────────────────────────
 
-function EmptyState({ onRefresh }: { onRefresh: () => void }) {
+function EmptyState({ onBack }: { onBack: () => void }) {
   return (
     <View style={styles.emptyWrap}>
       <BrandMark size={28} />
-      <Text style={styles.emptyTitle}>Your matches are on their way.</Text>
+      <Text style={styles.emptyTitle}>No one new today.</Text>
       <Text style={styles.emptySub}>
-        We find people based on your interests and pace. Check back soon — or
-        invite a friend.
+        Your next batch arrives tomorrow. Good things take time.
       </Text>
       <View style={styles.emptyBtn}>
-        <Button onPress={onRefresh}>Refresh</Button>
+        <Button variant="ghost" onPress={onBack}>
+          ← Go back
+        </Button>
       </View>
     </View>
   );
@@ -563,11 +573,25 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
 
-  // Empty state
+  bodyScroll: {
+    flex: 1,
+  },
+  bodyContent: {
+    flexGrow: 1,
+    justifyContent: "flex-start",
+    paddingBottom: 100, // tab bar offset
+  },
+  emptyCentered: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    paddingBottom: 80,
+    paddingHorizontal: 24,
+  },
+
+  // Empty state inner stack
   emptyWrap: {
     alignItems: "center",
-    paddingTop: 60,
-    paddingHorizontal: spacing[6],
   },
   emptyTitle: {
     fontFamily: typography.fontDisplay,
@@ -587,12 +611,6 @@ const styles = StyleSheet.create({
   },
   emptyBtn: {
     marginTop: 20,
-  },
-
-  // Card list
-  cardList: {
-    paddingTop: spacing[1],
-    paddingBottom: spacing[8],
   },
 
   // Batch header

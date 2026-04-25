@@ -92,20 +92,14 @@ const SECTIONS: PrefSection[] = [
 interface ExpiryOption {
   value: ExpiryPreference;
   label: string;
-  subtitle: string;
-  recommended?: boolean;
+  isDefault?: boolean;
 }
 
 const EXPIRY_OPTIONS: ExpiryOption[] = [
-  { value: 7, label: "7 days", subtitle: "For quick exchanges" },
-  {
-    value: 14,
-    label: "14 days",
-    subtitle: "A comfortable rhythm",
-    recommended: true,
-  },
-  { value: 30, label: "30 days", subtitle: "For slow writers" },
-  { value: null, label: "Never", subtitle: "Letters stay open indefinitely" },
+  { value: null, label: "Never — letters stay open", isDefault: true },
+  { value: 30, label: "Archive after 30 days — for slow writers" },
+  { value: 14, label: "Archive after 14 days" },
+  { value: 7, label: "Archive after 7 days — for quick exchanges" },
 ];
 
 function expiryDisplay(value: ExpiryPreference): string {
@@ -180,17 +174,14 @@ export default function NotificationPreferences() {
                           <Text style={styles.expiryOptionLabel}>
                             {opt.label}
                           </Text>
-                          {opt.recommended && (
+                          {opt.isDefault && (
                             <View style={styles.recommendedTag}>
                               <Text style={styles.recommendedTagText}>
-                                recommended
+                                Default
                               </Text>
                             </View>
                           )}
                         </View>
-                        <Text style={styles.expiryOptionSub}>
-                          {opt.subtitle}
-                        </Text>
                       </View>
                       {selected ? (
                         <Feather
@@ -206,7 +197,8 @@ export default function NotificationPreferences() {
             )}
           </View>
           <Text style={styles.expiryFooter}>
-            Only you can see this setting. Your pen pals are never notified.
+            Letters stay open until you choose to close them. Enable
+            auto-archive if you prefer a quieter inbox.
           </Text>
         </View>
 
@@ -411,11 +403,6 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: semantic.ink,
     fontWeight: "500",
-  },
-  expiryOptionSub: {
-    fontFamily: typography.fontBody,
-    fontSize: 12,
-    color: semantic.inkMuted,
   },
   recommendedTag: {
     backgroundColor: semantic.accentSoft,

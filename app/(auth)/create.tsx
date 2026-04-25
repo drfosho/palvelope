@@ -19,15 +19,52 @@ import { semantic, typography, spacing } from "@/theme/tokens";
 import { supabase } from "@/lib/supabase";
 
 const ERROR_COLOR = "#B4402A";
+const INVITE_CODE_RE = /^[A-Z0-9]{3}-[A-Z0-9]{3}$/;
 
 const AGE_RANGES = [
-  "16\u201317",
-  "18\u201324",
-  "25\u201334",
-  "35\u201344",
-  "45\u201354",
+  "16–17",
+  "18–24",
+  "25–34",
+  "35–44",
+  "45–54",
   "55+",
 ] as const;
+
+async function acceptInviteCode(rawCode: string, newUserId: string) {
+  const code = rawCode.toUpperCase();
+  const { data: invite, error: lookupErr } = await supabase
+    .from("invites")
+    .select("*")
+    .eq("code", code)
+    .eq("status", "pending")
+    .gt("expires_at", new Date().toISOString())
+    .maybeSingle();
+
+  if (lookupErr) {
+    console.warn("[invite] lookup error:", lookupErr);
+    return;
+  }
+  if (!invite) {
+    console.warn("[invite] no matching pending invite for", code);
+    return;
+  }
+
+  const { error: acceptErr } = await supabase
+    .from("invites")
+    .update({
+      accepted_by: newUserId,
+      accepted_at: new Date().toISOString(),
+      status: "accepted",
+    })
+    .eq("id", invite.id);
+  if (acceptErr) console.warn("[invite] accept error:", acceptErr);
+
+  const { error: tcErr } = await supabase.from("trusted_connections").insert({
+    user_1: invite.inviter_id,
+    user_2: newUserId,
+  });
+  if (tcErr) console.warn("[invite] trusted_connections insert:", tcErr);
+}
 
 export default function Create() {
   const router = useRouter();
@@ -36,22 +73,54 @@ export default function Create() {
   const [agreed, setAgreed] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [inviteOpen, setInviteOpen] = useState(false);
+  const [inviteCode, setInviteCode] = useState("");
+  const [inviteError, setInviteError] = useState<string | null>(null);
 
   const canContinue = email.trim().length > 0 && ageRange !== null && agreed;
 
+  const handleInviteChange = (text: string) => {
+    const cleaned = text
+      .toUpperCase()
+      .replace(/[^A-Z0-9-]/g, "")
+      .slice(0, 7);
+    setInviteCode(cleaned);
+    setInviteError(null);
+  };
+
+  const handleInviteBlur = () => {
+    if (inviteCode.length > 0 && !INVITE_CODE_RE.test(inviteCode)) {
+      setInviteError("Format should be XXX-XXX");
+    }
+  };
+
   const handleContinue = useCallback(async () => {
     if (!canContinue) return;
+    if (
+      inviteCode.length > 0 &&
+      !INVITE_CODE_RE.test(inviteCode)
+    ) {
+      setInviteError("Format should be XXX-XXX");
+      return;
+    }
     setError(null);
     setLoading(true);
     const { data, error: err } = await supabase.auth.signUp({
       email: email.trim().toLowerCase(),
-      password: 'TempPass1!' + Math.random().toString(36).slice(-6),
-      options: { data: { age_range: ageRange, onboarding_complete: false } }
+      password: "TempPass1!" + Math.random().toString(36).slice(-6),
+      options: { data: { age_range: ageRange, onboarding_complete: false } },
     });
+    if (err) {
+      setLoading(false);
+      setError(err.message);
+      return;
+    }
+    if (data.user && inviteCode.length > 0) {
+      await acceptInviteCode(inviteCode, data.user.id);
+    }
     setLoading(false);
-    if (data.session) router.push('/(auth)/onboarding');
-    else if (err) setError(err.message);
-  }, [canContinue, email, ageRange, router]);
+    if (data.session) router.push("/(auth)/onboarding");
+  }, [canContinue, email, ageRange, inviteCode, router]);
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -132,6 +201,37 @@ export default function Create() {
             </Text>
           </Pressable>
 
+          {/* Invite code (collapsible) */}
+          <Pressable
+            style={styles.inviteToggle}
+            onPress={() => setInviteOpen((v) => !v)}
+          >
+            <Text style={styles.inviteToggleText}>
+              Have an invite code?
+            </Text>
+            <Feather
+              name={inviteOpen ? "chevron-up" : "chevron-down"}
+              size={14}
+              color={semantic.accentInk}
+            />
+          </Pressable>
+          {inviteOpen && (
+            <View style={styles.inviteFieldGroup}>
+              <TextInput
+                value={inviteCode}
+                onChangeText={handleInviteChange}
+                onBlur={handleInviteBlur}
+                placeholder="e.g. XK9-TW2"
+                autoCapitalize="characters"
+                autoCorrect={false}
+                maxLength={7}
+              />
+              {inviteError && (
+                <Text style={styles.inviteError}>{inviteError}</Text>
+              )}
+            </View>
+          )}
+
           <View style={styles.spacer} />
 
           <Button
@@ -139,7 +239,7 @@ export default function Create() {
             disabled={!canContinue || loading}
             onPress={handleContinue}
           >
-            {loading ? "Creating\u2026" : "Continue"}
+            {loading ? "Creating…" : "Continue"}
           </Button>
           {loading && (
             <ActivityIndicator
@@ -245,6 +345,31 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   termsLink: { color: semantic.accentInk },
+
+  inviteToggle: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    alignSelf: "flex-start",
+    marginTop: spacing[3],
+    paddingVertical: spacing[1],
+  },
+  inviteToggleText: {
+    fontFamily: typography.fontBody,
+    fontSize: 13,
+    color: semantic.accentInk,
+    fontWeight: "500",
+  },
+  inviteFieldGroup: {
+    marginTop: spacing[2],
+    gap: spacing[1],
+  },
+  inviteError: {
+    fontFamily: typography.fontBody,
+    fontSize: 12,
+    color: ERROR_COLOR,
+  },
+
   spacer: { flex: 1, minHeight: spacing[8] },
   spinner: { marginTop: spacing[2] },
   errorText: {
