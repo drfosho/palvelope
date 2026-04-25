@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState } from "react";
 import {
   View,
   Text,
@@ -16,6 +16,10 @@ import {
   useNotificationStore,
   type NotificationPrefKey,
 } from "@/stores/notificationStore";
+import {
+  useExpiryStore,
+  type ExpiryPreference,
+} from "@/stores/expiryStore";
 
 // ─── Section config ─────────────────────────────────────────────────────────
 
@@ -85,11 +89,37 @@ const SECTIONS: PrefSection[] = [
   },
 ];
 
+interface ExpiryOption {
+  value: ExpiryPreference;
+  label: string;
+  subtitle: string;
+  recommended?: boolean;
+}
+
+const EXPIRY_OPTIONS: ExpiryOption[] = [
+  { value: 7, label: "7 days", subtitle: "For quick exchanges" },
+  {
+    value: 14,
+    label: "14 days",
+    subtitle: "A comfortable rhythm",
+    recommended: true,
+  },
+  { value: 30, label: "30 days", subtitle: "For slow writers" },
+  { value: null, label: "Never", subtitle: "Letters stay open indefinitely" },
+];
+
+function expiryDisplay(value: ExpiryPreference): string {
+  if (value === null) return "Never";
+  return `${value} days`;
+}
+
 // ─── Component ──────────────────────────────────────────────────────────────
 
 export default function NotificationPreferences() {
   const router = useRouter();
   const prefs = useNotificationStore();
+  const { defaultExpiry, setDefaultExpiry } = useExpiryStore();
+  const [expiryOpen, setExpiryOpen] = useState(false);
 
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
@@ -115,11 +145,76 @@ export default function NotificationPreferences() {
           </Text>
         </View>
 
-        {/* Sections */}
-        {SECTIONS.map((section, idx) => (
+        {/* Letter expiry section */}
+        <View style={styles.section}>
+          <Text style={styles.sectionLabel}>LETTER EXPIRY</Text>
+          <View style={styles.expiryCard}>
+            <Pressable
+              style={styles.expiryHeader}
+              onPress={() => setExpiryOpen((v) => !v)}
+            >
+              <Feather name="clock" size={18} color={semantic.accentInk} />
+              <Text style={styles.expiryHeaderLabel}>Auto-archive after</Text>
+              <Text style={styles.expiryHeaderValue}>
+                {expiryDisplay(defaultExpiry)}
+              </Text>
+              <Feather
+                name={expiryOpen ? "chevron-up" : "chevron-down"}
+                size={16}
+                color={semantic.inkSoft}
+              />
+            </Pressable>
+
+            {expiryOpen && (
+              <View style={styles.expiryOptionList}>
+                {EXPIRY_OPTIONS.map((opt) => {
+                  const selected = defaultExpiry === opt.value;
+                  return (
+                    <Pressable
+                      key={String(opt.value)}
+                      style={styles.expiryOption}
+                      onPress={() => setDefaultExpiry(opt.value)}
+                    >
+                      <View style={styles.expiryOptionMid}>
+                        <View style={styles.expiryOptionLabelRow}>
+                          <Text style={styles.expiryOptionLabel}>
+                            {opt.label}
+                          </Text>
+                          {opt.recommended && (
+                            <View style={styles.recommendedTag}>
+                              <Text style={styles.recommendedTagText}>
+                                recommended
+                              </Text>
+                            </View>
+                          )}
+                        </View>
+                        <Text style={styles.expiryOptionSub}>
+                          {opt.subtitle}
+                        </Text>
+                      </View>
+                      {selected ? (
+                        <Feather
+                          name="check"
+                          size={16}
+                          color={semantic.accentInk}
+                        />
+                      ) : null}
+                    </Pressable>
+                  );
+                })}
+              </View>
+            )}
+          </View>
+          <Text style={styles.expiryFooter}>
+            Only you can see this setting. Your pen pals are never notified.
+          </Text>
+        </View>
+
+        {/* Notification sections */}
+        {SECTIONS.map((section) => (
           <View
             key={section.title}
-            style={[styles.section, idx > 0 && styles.sectionSpaced]}
+            style={[styles.section, styles.sectionSpaced]}
           >
             <Text style={styles.sectionLabel}>{section.title}</Text>
             <View style={styles.card}>
@@ -261,5 +356,85 @@ const styles = StyleSheet.create({
     height: 1,
     backgroundColor: semantic.ruleSoft,
     marginLeft: 16 + 18 + 12,
+  },
+
+  // Expiry card
+  expiryCard: {
+    backgroundColor: semantic.surface,
+    borderRadius: 16,
+    marginHorizontal: spacing[5],
+    borderWidth: 1,
+    borderColor: semantic.rule,
+    overflow: "hidden",
+  },
+  expiryHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    padding: 16,
+  },
+  expiryHeaderLabel: {
+    flex: 1,
+    fontFamily: typography.fontBody,
+    fontSize: 15,
+    color: semantic.ink,
+  },
+  expiryHeaderValue: {
+    fontFamily: typography.fontBody,
+    fontSize: 15,
+    fontWeight: "500",
+    color: semantic.accentInk,
+    marginRight: spacing[2],
+  },
+  expiryOptionList: {
+    borderTopWidth: 1,
+    borderTopColor: semantic.ruleSoft,
+  },
+  expiryOption: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+  },
+  expiryOptionMid: {
+    flex: 1,
+    gap: 2,
+  },
+  expiryOptionLabelRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  expiryOptionLabel: {
+    fontFamily: typography.fontBody,
+    fontSize: 14,
+    color: semantic.ink,
+    fontWeight: "500",
+  },
+  expiryOptionSub: {
+    fontFamily: typography.fontBody,
+    fontSize: 12,
+    color: semantic.inkMuted,
+  },
+  recommendedTag: {
+    backgroundColor: semantic.accentSoft,
+    borderRadius: 6,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+  },
+  recommendedTagText: {
+    fontFamily: MONO_FONT,
+    fontSize: 10,
+    color: semantic.accentInk,
+    fontWeight: "500",
+  },
+  expiryFooter: {
+    fontFamily: typography.fontBody,
+    fontSize: 12,
+    color: semantic.inkSoft,
+    paddingHorizontal: spacing[5],
+    marginTop: spacing[2],
+    lineHeight: 12 * 1.4,
   },
 });

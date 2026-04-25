@@ -6,6 +6,7 @@ import {
   ScrollView,
   Pressable,
   ActivityIndicator,
+  Alert,
 } from "react-native";
 import { useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -26,16 +27,17 @@ interface DisplayThread {
   time: string;
   unread: boolean;
   draft: boolean;
+  status: "active" | "archived" | "expired" | null;
 }
 
 // ─── Sample fallback (only shown if getConversations throws) ────────────────
 
 const SAMPLE_THREADS: DisplayThread[] = [
-  { id: "1", palId: "1", name: "Mira K.", hue: 210, region: "Europe", lastMessage: "The small things are the point, I think. I’m glad you sent it.", time: "09:31", unread: true, draft: false },
-  { id: "2", palId: "2", name: "T.J.", hue: 145, region: "East Asia", lastMessage: "I’ve been walking the old canal district every morning this week.", time: "Yesterday", unread: false, draft: false },
-  { id: "3", palId: "4", name: "Søren", hue: 260, region: "Europe", lastMessage: "Draft saved — finish your letter", time: "2d ago", unread: false, draft: true },
-  { id: "4", palId: "5", name: "Lena B.", hue: 340, region: "Americas", lastMessage: "What a strange and beautiful question that was.", time: "3d ago", unread: false, draft: false },
-  { id: "5", palId: "6", name: "Rafi", hue: 180, region: "Middle East", lastMessage: "Sent you a recipe. It’s my grandmother’s.", time: "5d ago", unread: false, draft: false },
+  { id: "1", palId: "1", name: "Mira K.", hue: 210, region: "Europe", lastMessage: "The small things are the point, I think. I’m glad you sent it.", time: "09:31", unread: true, draft: false, status: "active" },
+  { id: "2", palId: "2", name: "T.J.", hue: 145, region: "East Asia", lastMessage: "I’ve been walking the old canal district every morning this week.", time: "Yesterday", unread: false, draft: false, status: "active" },
+  { id: "3", palId: "4", name: "Søren", hue: 260, region: "Europe", lastMessage: "Draft saved — finish your letter", time: "2d ago", unread: false, draft: true, status: "active" },
+  { id: "4", palId: "5", name: "Lena B.", hue: 340, region: "Americas", lastMessage: "What a strange and beautiful question that was.", time: "3d ago", unread: false, draft: false, status: "active" },
+  { id: "5", palId: "6", name: "Rafi", hue: 180, region: "Middle East", lastMessage: "Sent you a recipe. It’s my grandmother’s.", time: "5d ago", unread: false, draft: false, status: "active" },
 ];
 
 const FILTERS = ["All", "Unread", "Writing back", "Archived"];
@@ -73,11 +75,8 @@ function formatThreadTime(iso: string | null | undefined): string {
   return `${dayDiff}d ago`;
 }
 
-function normalizeConversation(convo: any, currentUserId: string): DisplayThread {
-  const otherProfile =
-    convo.participant_1 === currentUserId
-      ? convo.participant_2_profile
-      : convo.participant_1_profile;
+function normalizeConversation(convo: any, _currentUserId: string): DisplayThread {
+  const otherProfile = convo.other_profile;
   const profileId = otherProfile?.id ?? "";
   return {
     id: convo.id,
@@ -89,6 +88,7 @@ function normalizeConversation(convo: any, currentUserId: string): DisplayThread
     time: formatThreadTime(convo.last_message_at),
     unread: false,
     draft: false,
+    status: (convo.status ?? "active") as DisplayThread["status"],
   };
 }
 
@@ -121,6 +121,10 @@ export default function Letters() {
         setCurrentUserId(session.user.id);
 
         const convos = await getConversations(session.user.id);
+        console.log(
+          "[Letters] conversations:",
+          JSON.stringify(convos, null, 2)
+        );
         if (cancelled) return;
         setConversations(convos);
         setUsingSampleData(false);
@@ -152,11 +156,18 @@ export default function Letters() {
     };
   }, []);
 
-  const threads: DisplayThread[] = usingSampleData
+  const allThreads: DisplayThread[] = usingSampleData
     ? SAMPLE_THREADS
     : currentUserId
     ? conversations.map((c) => normalizeConversation(c, currentUserId))
     : [];
+
+  const threads =
+    activeFilter === "Archived"
+      ? allThreads.filter(
+          (t) => t.status === "expired" || t.status === "archived"
+        )
+      : allThreads.filter((t) => t.status === "active" || !t.status);
 
   const unreadCount = threads.filter((t) => t.unread).length;
   const hasThreads = threads.length > 0;
@@ -175,7 +186,21 @@ export default function Letters() {
             <Text style={styles.sampleNote}>Showing sample data</Text>
           )}
         </View>
-        <Pressable style={styles.iconBtn} onPress={() => {}}>
+        <Pressable
+          style={styles.iconBtn}
+          onPress={() =>
+            Alert.alert(
+              "Start from Discover",
+              "Find someone to write to first — then your conversation will appear here.",
+              [
+                {
+                  text: "Go to Discover",
+                  onPress: () => router.push("/(tabs)/discover"),
+                },
+              ]
+            )
+          }
+        >
           <Feather name="edit" size={18} color={semantic.inkMuted} />
         </Pressable>
       </View>
@@ -242,6 +267,8 @@ function ThreadRow({
   isLast: boolean;
   onPress: () => void;
 }) {
+  const isArchived =
+    thread.status === "expired" || thread.status === "archived";
   return (
     <Pressable style={styles.threadRow} onPress={onPress}>
       <Avatar name={thread.name} size="md" hue={thread.hue} />
@@ -252,13 +279,16 @@ function ThreadRow({
           <Text
             style={[
               styles.threadName,
-              thread.unread && styles.threadNameUnread,
+              thread.unread && !isArchived && styles.threadNameUnread,
+              isArchived && styles.threadNameArchived,
             ]}
             numberOfLines={1}
           >
             {thread.name}
           </Text>
-          <Text style={styles.threadTime}>{thread.time}</Text>
+          <Text style={styles.threadTime}>
+            {isArchived ? "Archived" : thread.time}
+          </Text>
         </View>
 
         {/* Preview */}
@@ -270,7 +300,7 @@ function ThreadRow({
           <Text
             style={[
               styles.threadPreview,
-              thread.unread && styles.threadPreviewUnread,
+              thread.unread && !isArchived && styles.threadPreviewUnread,
             ]}
             numberOfLines={1}
           >
@@ -279,10 +309,10 @@ function ThreadRow({
         )}
       </View>
 
-      {/* Indicator */}
-      {thread.unread ? (
+      {/* Indicator — hidden for archived */}
+      {!isArchived && thread.unread ? (
         <View style={styles.unreadDot} />
-      ) : thread.draft ? (
+      ) : !isArchived && thread.draft ? (
         <Feather name="edit-2" size={14} color={semantic.accentInk} />
       ) : null}
 
@@ -390,6 +420,10 @@ const styles = StyleSheet.create({
   },
   threadNameUnread: {
     fontWeight: "500",
+  },
+  threadNameArchived: {
+    fontStyle: "italic",
+    color: semantic.inkSoft,
   },
   threadTime: {
     fontFamily: typography.fontBody,

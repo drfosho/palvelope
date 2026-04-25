@@ -211,6 +211,7 @@ export default function ChatScreen() {
   );
   const [loading, setLoading] = useState(true);
   const [localMode, setLocalMode] = useState(false);
+  const [conversationExpired, setConversationExpired] = useState(false);
 
   const [draft, setDraft] = useState("");
   const [aiModalVisible, setAiModalVisible] = useState(false);
@@ -308,6 +309,21 @@ export default function ChatScreen() {
       }
 
       setConversationId(convoId);
+
+      // Check expiry status
+      const { data: convoData } = await supabase
+        .from("conversations")
+        .select("expires_at, status, expiry_days")
+        .eq("id", convoId)
+        .single();
+      if (cancelled) return;
+      const isExpired =
+        convoData?.status === "expired" ||
+        (convoData?.expires_at &&
+          new Date(convoData.expires_at) < new Date());
+      if (isExpired) {
+        setConversationExpired(true);
+      }
 
       const existing = await getMessages(convoId);
       if (cancelled) return;
@@ -550,8 +566,35 @@ export default function ChatScreen() {
           />
         )}
 
+        {/* Expired banner — replaces compose bar */}
+        {!isNewConversation && !loading && conversationExpired && (
+          <View
+            style={[
+              styles.expiredBanner,
+              { paddingBottom: composeBottomPad },
+            ]}
+          >
+            <Feather name="moon" size={16} color={semantic.inkSoft} />
+            <Text style={styles.expiredTitle}>
+              This letter has been quietly archived.
+            </Text>
+            <Text style={styles.expiredSub}>
+              No reply arrived in time. That’s okay.
+            </Text>
+            <View style={styles.expiredBtn}>
+              <Button
+                variant="ghost"
+                size="sm"
+                onPress={() => router.replace("/(tabs)/discover")}
+              >
+                Start a new letter
+              </Button>
+            </View>
+          </View>
+        )}
+
         {/* Compose bar */}
-        {!isNewConversation && !loading && (
+        {!isNewConversation && !loading && !conversationExpired && (
           <View style={[styles.composeBar, { paddingBottom: composeBottomPad }]}>
             <View style={styles.composeInner}>
               <RNTextInput
@@ -1051,6 +1094,33 @@ const styles = StyleSheet.create({
     color: FLAG_AMBER,
     lineHeight: 16,
     flex: 1,
+  },
+
+  // Expired banner
+  expiredBanner: {
+    backgroundColor: semantic.surface2,
+    borderTopWidth: 1,
+    borderTopColor: semantic.ruleSoft,
+    paddingHorizontal: spacing[5],
+    paddingTop: 16,
+    alignItems: "center",
+  },
+  expiredTitle: {
+    fontFamily: typography.fontDisplay,
+    fontSize: 15,
+    color: semantic.inkMuted,
+    textAlign: "center",
+    marginTop: 8,
+  },
+  expiredSub: {
+    fontFamily: typography.fontBody,
+    fontSize: 13,
+    color: semantic.inkSoft,
+    textAlign: "center",
+    marginTop: 4,
+  },
+  expiredBtn: {
+    marginTop: 12,
   },
 
   // Compose

@@ -8,7 +8,6 @@ import {
   Platform,
   ActivityIndicator,
   Animated,
-  Alert,
 } from "react-native";
 import { useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -123,6 +122,14 @@ export default function Discover() {
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [usingSampleData, setUsingSampleData] = useState(false);
   const [sortMode, setSortMode] = useState<SortMode>("best");
+  const fadeAnimsRef = useRef<Record<string, Animated.Value>>({});
+
+  const getFadeAnim = (displayId: string): Animated.Value => {
+    if (!fadeAnimsRef.current[displayId]) {
+      fadeAnimsRef.current[displayId] = new Animated.Value(1);
+    }
+    return fadeAnimsRef.current[displayId];
+  };
 
   const loadMatches = useCallback(async () => {
     setLoading(true);
@@ -140,6 +147,11 @@ export default function Discover() {
       setCurrentUser(session.user);
 
       const todaysMatches = await getTodaysMatches(session.user.id);
+      console.log(
+        "[Discover] raw matches from DB:",
+        JSON.stringify(todaysMatches, null, 2)
+      );
+      console.log("[Discover] match count:", todaysMatches.length);
 
       if (todaysMatches.length > 0) {
         setMatches(todaysMatches.map(normalizeRealMatch));
@@ -148,8 +160,10 @@ export default function Discover() {
         const { error } = await supabase.rpc("generate_daily_matches", {
           target_user_id: session.user.id,
         });
+        console.log("[Discover] RPC error:", error);
         if (!error) {
           const fresh = await getTodaysMatches(session.user.id);
+          console.log("[Discover] post-RPC match count:", fresh.length);
           setMatches(fresh.map(normalizeRealMatch));
           setUsingSampleData(false);
         } else {
@@ -179,17 +193,27 @@ export default function Discover() {
   });
 
   // ── Pass / accept ───────────────────────────────────────────────────────
-  const removeMatch = (profileId: string) => {
-    setMatches((prev) => prev.filter((m) => m.profileId !== profileId));
-  };
-
-  const handlePass = async (match: DisplayMatch) => {
-    if (match.matchId) {
-      updateMatchStatus(match.matchId, "passed").catch((e) =>
-        console.warn("updateMatchStatus passed failed:", e)
-      );
+  const handlePass = async (
+    matchId: string | null | undefined,
+    displayId: string
+  ) => {
+    console.log("[discover] handlePass matchId:", matchId, "displayId:", displayId);
+    // Always remove from UI immediately
+    Animated.timing(getFadeAnim(displayId), {
+      toValue: 0,
+      duration: 200,
+      useNativeDriver: true,
+    }).start(() => {
+      setMatches((prev) => prev.filter((m) => m.profileId !== displayId));
+    });
+    // Update DB if we have a real matchId
+    if (matchId) {
+      try {
+        await updateMatchStatus(matchId, "passed");
+      } catch (e) {
+        console.warn("updateMatchStatus passed failed:", e);
+      }
     }
-    removeMatch(match.profileId);
   };
 
   const handleWrite = async (match: DisplayMatch) => {
@@ -273,7 +297,8 @@ export default function Discover() {
             <MatchCard
               key={match.profileId}
               match={match}
-              onPass={() => handlePass(match)}
+              opacity={getFadeAnim(match.profileId)}
+              onPass={() => handlePass(match.matchId, match.profileId)}
               onWrite={() => handleWrite(match)}
               onOpenProfile={() =>
                 router.push({
@@ -298,12 +323,7 @@ export default function Discover() {
               <Button
                 variant="ghost"
                 size="sm"
-                onPress={() =>
-                  Alert.alert(
-                    "Past matches",
-                    "Past matches will be browsable soon."
-                  )
-                }
+                onPress={() => router.push("/past-matches")}
               >
                 Browse past matches
               </Button>
@@ -378,11 +398,13 @@ function trustPillPalette(color: TrustColor): { bg: string; fg: string } {
 
 function MatchCard({
   match,
+  opacity,
   onPass,
   onWrite,
   onOpenProfile,
 }: {
   match: DisplayMatch;
+  opacity: Animated.Value;
   onPass: () => void;
   onWrite: () => void;
   onOpenProfile: () => void;
@@ -390,15 +412,6 @@ function MatchCard({
   const reply = REPLY_META[match.replyStyle];
   const visibleInterests = match.interests.slice(0, 3);
   const extraCount = match.interests.length - 3;
-  const opacity = useRef(new Animated.Value(1)).current;
-
-  const fadeAndPass = () => {
-    Animated.timing(opacity, {
-      toValue: 0,
-      duration: 200,
-      useNativeDriver: true,
-    }).start(() => onPass());
-  };
 
   const location = match.city
     ? `${match.city} · ${match.region}`
@@ -471,7 +484,7 @@ function MatchCard({
           {match.lastActive ? `Active ${match.lastActive}` : ""}
         </Text>
         <View style={styles.actionBtns}>
-          <Button variant="ghost" size="sm" onPress={fadeAndPass}>
+          <Button variant="ghost" size="sm" onPress={onPass}>
             Pass
           </Button>
           <Button size="sm" onPress={onWrite}>

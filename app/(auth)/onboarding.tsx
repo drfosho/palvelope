@@ -10,6 +10,7 @@ import {
   Switch,
   Animated,
   Alert,
+  TextInput as RNTextInput,
 } from "react-native";
 import { useRouter } from "expo-router";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -28,12 +29,121 @@ import { supabase, updateProfile } from "@/lib/supabase";
 const STEPS = ["intent", "intro", "interests", "anonymity", "replyStyle", "region"] as const;
 const TOTAL_STEPS = STEPS.length;
 
-const INTERESTS = [
-  "Philosophy", "Literature", "Music", "Travel", "Food & Cooking", "Film",
-  "History", "Science", "Nature", "Art", "Languages", "Politics",
-  "Mental Health", "Spirituality", "Sport", "Tech", "Fashion", "Architecture",
-  "Parenting", "Gaming", "Sustainability", "Poetry", "Photography", "Medicine",
+const INTERESTS_BY_CATEGORY: Record<string, string[]> = {
+  "Arts & Culture": [
+    "Literature", "Poetry", "Film", "Theatre", "Photography", "Art",
+    "Architecture", "Design", "Fashion", "Ceramics", "Illustration", "Street Art",
+  ],
+  "Mind & Ideas": [
+    "Philosophy", "Psychology", "History", "Politics", "Science", "Economics",
+    "Ethics", "Linguistics", "Sociology", "Anthropology",
+  ],
+  "Nature & Body": [
+    "Nature", "Sustainability", "Hiking", "Running", "Yoga", "Cycling",
+    "Swimming", "Climbing", "Sport", "Nutrition", "Mental Health", "Medicine",
+  ],
+  "Food & Home": [
+    "Food & Cooking", "Baking", "Coffee", "Tea", "Wine", "Gardening",
+    "Interior Design", "DIY",
+  ],
+  "Tech & Work": [
+    "Tech", "Programming", "AI", "Startups", "Business", "Productivity", "Education",
+  ],
+  "Life & Spirit": [
+    "Travel", "Spirituality", "Religion", "Parenting", "Relationships",
+    "Self-improvement", "Minimalism",
+  ],
+  "Play & Hobby": [
+    "Gaming", "Music", "Dancing", "Languages", "Astronomy", "Collecting",
+    "Puzzles", "Comics", "Anime",
+  ],
+};
+
+const TOP_20 = [
+  "Literature", "Music", "Travel", "Food & Cooking", "Film", "Philosophy",
+  "Photography", "Nature", "Art", "Tech", "Gaming", "Languages", "Science",
+  "Mental Health", "Sustainability", "History", "Poetry", "Coffee",
+  "Psychology", "Running",
 ];
+
+const INTEREST_ICON: Record<
+  string,
+  React.ComponentProps<typeof Feather>["name"]
+> = {
+  // Arts & Culture
+  "Literature": "book-open",
+  "Poetry": "feather",
+  "Film": "film",
+  "Theatre": "mic",
+  "Photography": "camera",
+  "Art": "aperture",
+  "Architecture": "layers",
+  "Design": "layers",
+  "Fashion": "scissors",
+  "Ceramics": "tool",
+  "Illustration": "pen-tool",
+  "Street Art": "edit-3",
+  // Mind & Ideas
+  "Philosophy": "moon",
+  "Psychology": "eye",
+  "History": "book",
+  "Politics": "flag",
+  "Science": "activity",
+  "Economics": "trending-up",
+  "Ethics": "shield",
+  "Linguistics": "globe",
+  "Sociology": "users",
+  "Anthropology": "compass",
+  // Nature & Body
+  "Nature": "sun",
+  "Sustainability": "wind",
+  "Hiking": "map",
+  "Running": "activity",
+  "Yoga": "heart",
+  "Cycling": "navigation",
+  "Swimming": "droplet",
+  "Climbing": "trending-up",
+  "Sport": "target",
+  "Nutrition": "heart",
+  "Mental Health": "heart",
+  "Medicine": "plus-square",
+  // Food & Home
+  "Food & Cooking": "coffee",
+  "Baking": "coffee",
+  "Coffee": "coffee",
+  "Tea": "coffee",
+  "Wine": "coffee",
+  "Gardening": "sun",
+  "Interior Design": "home",
+  "DIY": "tool",
+  // Tech & Work
+  "Tech": "cpu",
+  "Programming": "code",
+  "AI": "cpu",
+  "Startups": "trending-up",
+  "Business": "briefcase",
+  "Productivity": "check-square",
+  "Education": "book-open",
+  // Life & Spirit
+  "Travel": "map",
+  "Spirituality": "star",
+  "Religion": "star",
+  "Parenting": "users",
+  "Relationships": "heart",
+  "Self-improvement": "trending-up",
+  "Minimalism": "square",
+  // Play & Hobby
+  "Gaming": "play",
+  "Music": "music",
+  "Dancing": "music",
+  "Languages": "globe",
+  "Astronomy": "moon",
+  "Collecting": "package",
+  "Puzzles": "grid",
+  "Comics": "bookmark",
+  "Anime": "tv",
+};
+
 const MAX_INTERESTS = 6;
 const MIN_INTERESTS = 2;
 
@@ -266,28 +376,122 @@ function StepInterests({
   interests: string[];
   toggleInterest: (interest: string) => void;
 }) {
+  const [query, setQuery] = useState("");
+  const q = query.trim().toLowerCase();
   const atMax = interests.length >= MAX_INTERESTS;
+
+  type Group = { category: string | null; items: string[] };
+  let groups: Group[];
+
+  if (q.length === 0) {
+    groups = [{ category: null, items: TOP_20 }];
+  } else {
+    groups = Object.entries(INTERESTS_BY_CATEGORY)
+      .map(([category, items]) => ({
+        category,
+        items: items.filter((i) => i.toLowerCase().includes(q)),
+      }))
+      .filter((g) => g.items.length > 0);
+  }
+
   return (
     <View style={styles.stepContent}>
-      <View style={styles.chipWrap}>
-        {INTERESTS.map((interest) => {
-          const selected = interests.includes(interest);
-          const dimmed = atMax && !selected;
-          return (
-            <Chip
-              key={interest}
-              label={interest}
-              selected={selected}
-              disabled={dimmed}
-              onPress={() => toggleInterest(interest)}
-            />
-          );
-        })}
+      {/* Search bar */}
+      <View style={styles.searchWrap}>
+        <Feather
+          name="search"
+          size={16}
+          color={semantic.inkSoft}
+          style={styles.searchIcon}
+        />
+        <RNTextInput
+          style={styles.searchInput}
+          value={query}
+          onChangeText={setQuery}
+          placeholder="Search interests…"
+          placeholderTextColor={semantic.inkSoft}
+          autoCapitalize="none"
+          autoCorrect={false}
+          returnKeyType="search"
+          clearButtonMode="while-editing"
+        />
       </View>
+
+      {/* Counter */}
       <Text style={styles.helperText}>
         {interests.length} of {MAX_INTERESTS} selected
       </Text>
+
+      {/* Groups */}
+      {groups.length === 0 ? (
+        <Text style={[styles.helperText, styles.noResults]}>
+          No interests match “{query.trim()}”
+        </Text>
+      ) : (
+        groups.map((group) => (
+          <View
+            key={group.category ?? "_top"}
+            style={styles.interestGroup}
+          >
+            {group.category && (
+              <Text style={styles.monoLabel}>
+                {group.category.toUpperCase()}
+              </Text>
+            )}
+            {group.items.map((interest) => {
+              const selected = interests.includes(interest);
+              const disabled = atMax && !selected;
+              return (
+                <InterestCard
+                  key={interest}
+                  interest={interest}
+                  selected={selected}
+                  disabled={disabled}
+                  onPress={() => toggleInterest(interest)}
+                />
+              );
+            })}
+          </View>
+        ))
+      )}
+
+      {q.length === 0 && (
+        <Text style={styles.searchHint}>
+          Search for more interests above
+        </Text>
+      )}
     </View>
+  );
+}
+
+function InterestCard({
+  interest,
+  selected,
+  disabled,
+  onPress,
+}: {
+  interest: string;
+  selected: boolean;
+  disabled?: boolean;
+  onPress: () => void;
+}) {
+  const icon = INTEREST_ICON[interest] ?? "circle";
+  return (
+    <Pressable
+      style={[
+        styles.interestCard,
+        selected ? styles.interestCardSelected : styles.interestCardDefault,
+        disabled && { opacity: 0.4 },
+      ]}
+      disabled={disabled}
+      onPress={onPress}
+    >
+      <Feather name={icon} size={18} color={semantic.accentInk} />
+      <Text style={styles.interestCardText}>{interest}</Text>
+      {selected && (
+        <Feather name="check" size={16} color={semantic.accentInk} />
+      )}
+    </Pressable>
   );
 }
 
@@ -876,5 +1080,65 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: semantic.inkMuted,
     lineHeight: 13 * 1.4,
+  },
+
+  // Interests step
+  searchWrap: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: semantic.surface2,
+    borderWidth: 1,
+    borderColor: semantic.rule,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+  },
+  searchIcon: {
+    marginRight: spacing[2],
+  },
+  searchInput: {
+    flex: 1,
+    paddingVertical: 12,
+    fontFamily: typography.fontBody,
+    fontSize: 15,
+    color: semantic.ink,
+  },
+  interestGroup: {
+    gap: spacing[2],
+    marginTop: spacing[3],
+  },
+  interestCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    borderRadius: 14,
+    padding: 14,
+  },
+  interestCardDefault: {
+    backgroundColor: semantic.surface,
+    borderWidth: 1,
+    borderColor: semantic.rule,
+  },
+  interestCardSelected: {
+    backgroundColor: semantic.accentSoft,
+    borderWidth: 1.5,
+    borderColor: semantic.accentInk,
+  },
+  interestCardText: {
+    flex: 1,
+    fontFamily: typography.fontBody,
+    fontSize: 15,
+    fontWeight: "500",
+    color: semantic.ink,
+  },
+  searchHint: {
+    textAlign: "center",
+    marginTop: spacing[3],
+    fontFamily: typography.fontBody,
+    fontSize: 12,
+    color: semantic.inkSoft,
+  },
+  noResults: {
+    textAlign: "center",
+    marginTop: spacing[4],
   },
 });

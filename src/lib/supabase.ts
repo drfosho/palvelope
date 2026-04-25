@@ -3,24 +3,59 @@ import * as SecureStore from "expo-secure-store";
 import Constants from "expo-constants";
 
 // ─── Auth storage adapter ───────────────────────────────────────────────────
+// Values can exceed SecureStore's 2048-byte limit (Supabase JWTs + refresh
+// tokens). We chunk into `${key}.${i}` entries and transparently rejoin them.
+
+const CHUNK_SIZE = 1800;
 
 const SecureStoreAdapter = {
   getItem: async (key: string) => {
     try {
-      return await SecureStore.getItemAsync(key);
+      const chunks: string[] = [];
+      let i = 0;
+      while (true) {
+        const chunk = await SecureStore.getItemAsync(`${key}.${i}`);
+        if (chunk === null) break;
+        chunks.push(chunk);
+        i++;
+      }
+      if (chunks.length === 0) {
+        // Try legacy single-key format
+        return await SecureStore.getItemAsync(key);
+      }
+      return chunks.join("");
     } catch {
       return null;
     }
   },
   setItem: async (key: string, value: string) => {
     try {
-      await SecureStore.setItemAsync(key, value);
+      // Delete old chunks first
+      let i = 0;
+      while (true) {
+        const existing = await SecureStore.getItemAsync(`${key}.${i}`);
+        if (existing === null) break;
+        await SecureStore.deleteItemAsync(`${key}.${i}`);
+        i++;
+      }
+      // Write new chunks
+      for (let j = 0; j * CHUNK_SIZE < value.length; j++) {
+        const chunk = value.slice(j * CHUNK_SIZE, (j + 1) * CHUNK_SIZE);
+        await SecureStore.setItemAsync(`${key}.${j}`, chunk);
+      }
     } catch (e) {
       console.warn("SecureStore setItem failed:", e);
     }
   },
   removeItem: async (key: string) => {
     try {
+      let i = 0;
+      while (true) {
+        const existing = await SecureStore.getItemAsync(`${key}.${i}`);
+        if (existing === null) break;
+        await SecureStore.deleteItemAsync(`${key}.${i}`);
+        i++;
+      }
       await SecureStore.deleteItemAsync(key);
     } catch (e) {
       console.warn("SecureStore removeItem failed:", e);
@@ -91,6 +126,12 @@ export type Conversation = {
   last_message_preview: string | null;
   created_at: string;
   updated_at: string;
+  // Added in 007_letter_expiry.sql — optional for older rows
+  status?: "active" | "archived" | "expired" | null;
+  expires_at?: string | null;
+  expiry_days?: number | null;
+  archived_at?: string | null;
+  archived_by?: string | null;
 };
 
 export type Message = {
@@ -144,23 +185,54 @@ export async function getProfile(userId: string): Promise<Profile | null> {
 // ─── Conversation helpers ───────────────────────────────────────────────────
 
 export async function getConversations(userId: string) {
-  const { data } = await supabase
+  // Step 1: get conversations
+  const { data: convos, error: convosError } = await supabase
     .from("conversations")
-    .select(
-      `
-      *,
-      participant_1_profile:profiles!conversations_participant_1_fkey(id, display_name, home_region),
-      participant_2_profile:profiles!conversations_participant_2_fkey(id, display_name, home_region)
-    `
-    )
+    .select("*")
     .or(`participant_1.eq.${userId},participant_2.eq.${userId}`)
     .order("last_message_at", { ascending: false });
-  return data ?? [];
+
+  if (convosError) {
+    console.error("[getConversations] error:", convosError);
+    return [];
+  }
+  if (!convos || convos.length === 0) return [];
+
+  // Step 2: get the other participant IDs
+  const otherIds = convos.map((c: any) =>
+    c.participant_1 === userId ? c.participant_2 : c.participant_1
+  );
+
+  // Step 3: fetch their profiles
+  const { data: profiles, error: profilesError } = await supabase
+    .from("profiles")
+    .select("id, display_name, home_region, reply_style, interests")
+    .in("id", otherIds);
+
+  if (profilesError) {
+    console.error("[getConversations] profiles error:", profilesError);
+  }
+
+  // Step 4: stitch together
+  return convos.map((c: any) => {
+    const otherId =
+      c.participant_1 === userId ? c.participant_2 : c.participant_1;
+    const otherProfile = profiles?.find((p: any) => p.id === otherId) ?? null;
+    return {
+      ...c,
+      participant_1_profile:
+        c.participant_1 === userId ? null : otherProfile,
+      participant_2_profile:
+        c.participant_2 === userId ? null : otherProfile,
+      other_profile: otherProfile,
+    };
+  });
 }
 
 export async function getOrCreateConversation(
   userId: string,
-  palId: string
+  palId: string,
+  expiryDays: number | null = 14
 ): Promise<string | null> {
   // Check if conversation already exists (either direction)
   const { data: existing } = await supabase
@@ -169,16 +241,31 @@ export async function getOrCreateConversation(
     .or(
       `and(participant_1.eq.${userId},participant_2.eq.${palId}),and(participant_1.eq.${palId},participant_2.eq.${userId})`
     )
-    .single();
+    .maybeSingle();
 
   if (existing) return existing.id;
 
+  const expiresAt = expiryDays
+    ? new Date(Date.now() + expiryDays * 24 * 60 * 60 * 1000).toISOString()
+    : null;
+
   // Create new conversation
-  const { data: created } = await supabase
+  const { data: created, error: createErr } = await supabase
     .from("conversations")
-    .insert({ participant_1: userId, participant_2: palId })
+    .insert({
+      participant_1: userId,
+      participant_2: palId,
+      expires_at: expiresAt,
+      expiry_days: expiryDays,
+      status: "active",
+    })
     .select("id")
     .single();
+
+  if (createErr) {
+    console.error("[getOrCreateConversation] insert error:", createErr);
+    return null;
+  }
 
   return created?.id ?? null;
 }
@@ -210,19 +297,43 @@ export async function sendMessage(
 // ─── Match helpers ──────────────────────────────────────────────────────────
 
 export async function getTodaysMatches(userId: string) {
-  const { data } = await supabase
+  // Two-step fetch: matches.matched_user_id references auth.users(id), not
+  // profiles(id), so PostgREST can't auto-resolve an embedded profile join.
+  // We pull matches first, then profiles by id, and stitch them together.
+  const today = new Date().toISOString().split("T")[0];
+
+  const { data: matches, error: matchErr } = await supabase
     .from("matches")
-    .select(
-      `
-      *,
-      matched_profile:profiles!matches_matched_user_id_fkey(*)
-    `
-    )
+    .select("*")
     .eq("user_id", userId)
-    .eq("batch_date", new Date().toISOString().split("T")[0])
+    .eq("batch_date", today)
     .eq("status", "pending")
     .order("compatibility_score", { ascending: false });
-  return data ?? [];
+
+  if (matchErr) {
+    console.warn("[getTodaysMatches] matches query error:", matchErr);
+    return [];
+  }
+  if (!matches || matches.length === 0) return [];
+
+  const matchedIds = matches.map((m: any) => m.matched_user_id);
+  const { data: profiles, error: profErr } = await supabase
+    .from("profiles")
+    .select("*")
+    .in("id", matchedIds);
+
+  if (profErr) {
+    console.warn("[getTodaysMatches] profiles query error:", profErr);
+    return matches.map((m: any) => ({ ...m, matched_profile: null }));
+  }
+
+  const byId = new Map<string, any>();
+  (profiles ?? []).forEach((p: any) => byId.set(p.id, p));
+
+  return matches.map((m: any) => ({
+    ...m,
+    matched_profile: byId.get(m.matched_user_id) ?? null,
+  }));
 }
 
 export async function updateMatchStatus(
