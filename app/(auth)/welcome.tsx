@@ -45,14 +45,13 @@ export default function Welcome() {
 
           {/* Headline */}
           <Text style={styles.headline}>
-            A letter is on its way{"\n"}
-            <Text style={styles.headlineAccent}>from somewhere.</Text>
+            Someone, somewhere,{"\n"}
+            <Text style={styles.headlineAccent}>is ready to write.</Text>
           </Text>
 
           {/* Subtitle */}
           <Text style={styles.subtitle}>
-            Real people, real conversations. Quietly matched, thoughtfully
-            written, always free.
+            Real people. Real conversations. At your own pace.
           </Text>
 
           {/* Feature card */}
